@@ -34,6 +34,33 @@ const INPUT_FLAGS = {
   'region-extract': 'region_extract',
 } as const;
 
+/**
+ * Maps parsed command-line flags onto the platform's neutral dataset inputs.
+ *
+ * Kept pure and exported so the mapping is directly provable: deciding what provenance a flag
+ * produces needs no filesystem, no child process and no tile tool.
+ */
+export function datasetInputsFromFlags(
+  flags: Readonly<Record<string, string>>,
+  workingDirectory: string,
+): DatasetInput[] {
+  const inputs: DatasetInput[] = [];
+  for (const [flag, kind] of Object.entries(INPUT_FLAGS)) {
+    const value = flags[flag];
+    if (value === undefined || value === 'true') continue;
+    const timestamp = flags[`${flag}-timestamp`];
+    // The resolved absolute path is used for provisioning only; the recorded provenance
+    // name defaults to the file name alone unless the operator supplies one.
+    inputs.push({
+      kind,
+      name: flags[`${flag}-name`] ?? defaultInputName(value),
+      path: resolve(workingDirectory, value),
+      ...(timestamp === undefined ? {} : { timestamp }),
+    });
+  }
+  return inputs;
+}
+
 const USAGE = [
   'atlas-os status',
   'atlas-os doctor',
@@ -160,20 +187,7 @@ async function updateCommand(
           output: { code: 'USAGE', message: '--source-name is required.', ok: false },
         };
       }
-      const inputs: DatasetInput[] = [];
-      for (const [flag, kind] of Object.entries(INPUT_FLAGS)) {
-        const value = flags[flag];
-        if (value === undefined || value === 'true') continue;
-        const timestamp = flags[`${flag}-timestamp`];
-        // The resolved absolute path is used for provisioning only; the recorded provenance
-        // name defaults to the file name alone unless the operator supplies one.
-        inputs.push({
-          kind,
-          name: flags[`${flag}-name`] ?? defaultInputName(value),
-          path: resolve(workingDirectory, value),
-          ...(timestamp === undefined ? {} : { timestamp }),
-        });
-      }
+      const inputs = datasetInputsFromFlags(flags, workingDirectory);
 
       const snapshotId = await composition.service.prepareSnapshot({
         inputs,

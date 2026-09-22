@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { parseSnapshotManifest } from '@atlas-os/platform';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { run } from '../../apps/cli/src/run.js';
+import { datasetInputsFromFlags, run } from '../../apps/cli/src/run.js';
 
 const directories: string[] = [];
 
@@ -128,42 +128,30 @@ describe('command-line input provenance', () => {
     expect(output).not.toContain('datasets');
   });
 
-  it('lets an explicit name override the derived one', async () => {
-    const directory = await workspace();
-    const dataRoot = join(directory, 'data');
-    const extract = join(directory, 'iran.osm.pbf');
-    const reference = join(directory, 'natural_earth_vector.sqlite.zip');
-    const coastline = join(directory, 'water-polygons-split-3857.zip');
-    for (const path of [extract, reference, coastline]) await writeFile(path, 'non-empty');
+  it('lets an explicit name override the derived one', () => {
+    const workingDirectory = process.cwd();
+    const supplied = join('sources', 'iran.osm.pbf');
 
-    const { code, output } = await capture(() =>
-      run(
-        [
-          'update',
-          'prepare',
-          '--source-name',
-          'release',
-          '--region-extract',
-          extract,
-          '--region-extract-name',
-          'iran-osm-2026-09-01',
-          '--region-extract-timestamp',
-          '2026-09-01T00:00:00.000Z',
-          '--reference-features',
-          reference,
-          '--coastline-polygons',
-          coastline,
-        ],
-        { ...environment(dataRoot), ATLAS_TILE_TOOL_KIND: 'external' },
-        directory,
-      ),
+    // The production mapping is exercised on its own: what provenance a flag produces is a
+    // decision about strings, so proving it needs no dataset, no tool and no clock.
+    const [input, ...rest] = datasetInputsFromFlags(
+      {
+        'region-extract': supplied,
+        'region-extract-name': 'iran-osm-2026-09-01',
+        'region-extract-timestamp': '2026-09-01T00:00:00.000Z',
+      },
+      workingDirectory,
     );
 
-    // The external tool is not installed here, so the run fails when it is started rather than
-    // during input validation. Reaching that point proves every named input was accepted.
-    expect(code).not.toBe(0);
-    expect(output).not.toContain('was not supplied');
-    expect(output).not.toContain('does not exist');
-    expect(output).not.toContain('is empty');
+    expect(rest).toEqual([]);
+    expect(input).toEqual({
+      kind: 'region_extract',
+      name: 'iran-osm-2026-09-01',
+      path: join(workingDirectory, 'sources', 'iran.osm.pbf'),
+      timestamp: '2026-09-01T00:00:00.000Z',
+    });
+    // 'iran.osm.pbf' is what the file-name default would have produced, as the case above
+    // proves; recording anything else is what makes this an override rather than a coincidence.
+    expect(input?.name).not.toBe('iran.osm.pbf');
   });
 });
