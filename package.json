@@ -1,0 +1,51 @@
+{
+  "name": "atlas-os",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Offline-first, self-hosted geospatial platform foundation",
+  "packageManager": "pnpm@10.17.1",
+  "engines": {
+    "node": ">=22.14.0"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ],
+    "overrides": {
+      "@types/node": "22.20.4"
+    }
+  },
+  "scripts": {
+    "build": "tsc -b packages/atlas-os packages/core apps/api apps/cli apps/updater && corepack pnpm --filter @atlas-os/web build",
+    "check": "corepack pnpm format:check && corepack pnpm lint && corepack pnpm typecheck && corepack pnpm test:unit && corepack pnpm test:contract && corepack pnpm test:integration && corepack pnpm test:boundaries && corepack pnpm test:container && corepack pnpm build && corepack pnpm compose:config",
+    "clean": "node scripts/clean.mjs",
+    "compose:build": "docker compose -f infra/compose/compose.yaml build",
+    "compose:config": "docker compose -f infra/compose/compose.yaml config",
+    "dev": "corepack pnpm --parallel --filter @atlas-os/api --filter @atlas-os/web dev",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "images:inspect": "node scripts/inspect-runtime-images.mjs",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "test:boundaries": "vitest run tests/boundaries && node scripts/check-boundaries.mjs",
+    "test:container": "vitest run tests/container && node scripts/check-container-safety.mjs",
+    "test:contract": "vitest run tests/contract",
+    "test:integration": "vitest run tests/integration",
+    "test:offline": "node scripts/offline-smoke.mjs",
+    "test:unit": "vitest run tests/unit",
+    "typecheck": "tsc -b packages/atlas-os packages/core apps/api apps/cli apps/updater --pretty false && tsc -p apps/web/tsconfig.json --noEmit --pretty false"
+  },
+  "devDependencies": {
+    "@eslint/js": "9.35.0",
+    "@types/node": "22.20.4",
+    "@types/react": "19.1.12",
+    "@types/react-dom": "19.1.9",
+    "eslint": "9.35.0",
+    "globals": "16.3.0",
+    "prettier": "3.6.2",
+    "tsx": "4.20.5",
+    "typescript": "5.9.2",
+    "typescript-eslint": "8.43.0",
+    "vitest": "3.2.4"
+  }
+}

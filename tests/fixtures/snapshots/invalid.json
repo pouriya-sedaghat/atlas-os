@@ -1,0 +1,17 @@
+{
+  "activation": "active",
+  "artifactVersions": {},
+  "checksums": {
+    "basemap": "not-a-sha256"
+  },
+  "components": {},
+  "createdAt": "not-a-date",
+  "region": "",
+  "schemaVersion": 2,
+  "snapshotId": "INVALID ID",
+  "source": {
+    "name": "",
+    "timestamp": "not-a-date"
+  },
+  "validation": "passed"
+}

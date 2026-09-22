@@ -1,0 +1,17 @@
+{
+  "name": "@atlas-os/updater",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "@atlas-os/core": "workspace:*"
+  }
+}

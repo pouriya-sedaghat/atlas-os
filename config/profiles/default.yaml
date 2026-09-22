@@ -1,0 +1,5 @@
+schemaVersion: 1
+name: default
+region: iran
+offline: true
+updateMode: disabled

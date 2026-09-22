@@ -1,0 +1,11 @@
+schemaVersion: 1
+id: iran
+name: Iran
+bounds:
+  west: 44.033
+  south: 24.397
+  east: 63.333
+  north: 39.782
+defaultLabelLanguages:
+  - fa
+  - en

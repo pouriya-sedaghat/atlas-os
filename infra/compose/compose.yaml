@@ -1,0 +1,123 @@
+name: atlas-os
+
+services:
+  api:
+    image: atlas-os/api:m0
+    build:
+      context: ../..
+      dockerfile: infra/images/server.Dockerfile
+      target: api-runtime
+    environment:
+      ATLAS_ACTIVE_SNAPSHOT_PATH: /var/lib/atlas/active.json
+      ATLAS_API_HOST: 0.0.0.0
+      ATLAS_API_PORT: '3000'
+      ATLAS_DATA_ROOT: /var/lib/atlas
+      ATLAS_GATEWAY_ORIGIN: http://127.0.0.1:8080
+      ATLAS_LOG_LEVEL: info
+      ATLAS_OFFLINE: 'true'
+      ATLAS_PROFILE: default
+      ATLAS_REGION: iran
+      ATLAS_UPDATE_MODE: disabled
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:3000/ready').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+    networks: [runtime]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    stop_grace_period: 15s
+
+  updater:
+    image: atlas-os/updater:m0
+    build:
+      context: ../..
+      dockerfile: infra/images/server.Dockerfile
+      target: updater-runtime
+    environment:
+      ATLAS_ACTIVE_SNAPSHOT_PATH: /var/lib/atlas/active.json
+      ATLAS_DATA_ROOT: /var/lib/atlas
+      ATLAS_OFFLINE: 'true'
+      ATLAS_PROFILE: default
+      ATLAS_REGION: iran
+      ATLAS_UPDATE_MODE: disabled
+      ATLAS_UPDATER_HOST: 0.0.0.0
+      ATLAS_UPDATER_PORT: '3001'
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:3001/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+    networks: [runtime]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    stop_grace_period: 15s
+
+  web:
+    image: atlas-os/web:m0
+    build:
+      context: ../..
+      dockerfile: infra/images/web.Dockerfile
+    healthcheck:
+      test: ['CMD', 'wget', '-qO-', 'http://127.0.0.1:8080/healthz']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+    networks: [runtime]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    stop_grace_period: 10s
+
+  gateway:
+    image: nginxinc/nginx-unprivileged:1.27.5-alpine@sha256:65e3e85dbaed8ba248841d9d58a899b6197106c23cb0ff1a132b7bfe0547e4c0
+    depends_on:
+      api:
+        condition: service_healthy
+      web:
+        condition: service_healthy
+    volumes:
+      - ../gateway/nginx.conf:/etc/nginx/nginx.conf:ro
+    ports:
+      - '${ATLAS_GATEWAY_PORT:-8080}:8080'
+    healthcheck:
+      test: ['CMD', 'wget', '-qO-', 'http://127.0.0.1:8080/healthz']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 3s
+    networks: [runtime]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    stop_grace_period: 10s
+
+networks:
+  runtime:
+    internal: true
+    driver: bridge
