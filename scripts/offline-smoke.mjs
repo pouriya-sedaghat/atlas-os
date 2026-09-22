@@ -18,6 +18,9 @@ if (version.error || version.status !== 0) {
 }
 
 const composeArguments = ['compose', '-f', composeFile, '-p', project];
+const gatewayRetryTimeoutMs = 5_000;
+const gatewayAttemptTimeoutMs = 1_000;
+const gatewayRetryDelayMs = 250;
 
 function writeCommandDiagnostics(label, result) {
   process.stderr.write(`\n${label}\n`);
@@ -26,9 +29,13 @@ function writeCommandDiagnostics(label, result) {
   if (result.stderr) process.stderr.write(result.stderr);
 }
 
-function reportStartupFailure() {
+function reportComposeDiagnostics() {
   writeCommandDiagnostics('docker compose ps --all', docker([...composeArguments, 'ps', '--all']));
-  for (const service of ['web', 'gateway', 'api', 'updater']) {
+  writeCommandDiagnostics(
+    'docker compose port gateway 8080',
+    docker([...composeArguments, 'port', 'gateway', '8080']),
+  );
+  for (const service of ['gateway', 'web', 'api', 'updater']) {
     writeCommandDiagnostics(
       `docker compose logs --no-color ${service}`,
       docker([...composeArguments, 'logs', '--no-color', service]),
@@ -36,24 +43,55 @@ function reportStartupFailure() {
   }
 }
 
+function reportComposeDiagnosticsWithoutThrowing() {
+  try {
+    reportComposeDiagnostics();
+  } catch (error) {
+    process.stderr.write(`Unable to collect Compose diagnostics: ${error.message}\n`);
+  }
+}
+
+function delay(milliseconds) {
+  return new Promise((resolveDelay) => setTimeout(resolveDelay, milliseconds));
+}
+
 async function requireOk(path) {
-  const response = await fetch(`http://127.0.0.1:8080${path}`, {
-    signal: AbortSignal.timeout(5_000),
+  const deadline = Date.now() + gatewayRetryTimeoutMs;
+  let lastError;
+  while (Date.now() < deadline) {
+    const remaining = deadline - Date.now();
+    let response;
+    try {
+      response = await fetch(`http://127.0.0.1:8080${path}`, {
+        signal: AbortSignal.timeout(Math.max(1, Math.min(gatewayAttemptTimeoutMs, remaining))),
+      });
+    } catch (error) {
+      lastError = error;
+      const retryDelay = Math.min(gatewayRetryDelayMs, deadline - Date.now());
+      if (retryDelay <= 0) break;
+      await delay(retryDelay);
+      continue;
+    }
+    if (!response.ok) throw new Error(`${path} returned HTTP ${response.status}`);
+    return response.text();
+  }
+  throw new Error(`${path} was unreachable through the gateway after ${gatewayRetryTimeoutMs}ms.`, {
+    cause: lastError,
   });
-  if (!response.ok) throw new Error(`${path} returned HTTP ${response.status}`);
-  return response.text();
 }
 
 async function main() {
   let startupStatus = 0;
+  let containersStarted = false;
   try {
     inspectRuntimeImages();
     const up = docker([...composeArguments, 'up', '--detach', '--no-build', '--wait']);
     if (up.status !== 0) {
       process.stderr.write(`${up.stdout}${up.stderr}`);
-      reportStartupFailure();
+      reportComposeDiagnosticsWithoutThrowing();
       startupStatus = up.status ?? 1;
     } else {
+      containersStarted = true;
       const [web, health, dataset] = await Promise.all([
         requireOk('/'),
         requireOk('/api/health'),
@@ -76,8 +114,13 @@ async function main() {
       if (updater.status !== 0) {
         throw new Error(`Updater offline health check failed: ${updater.stdout}${updater.stderr}`);
       }
-      process.stdout.write('Offline smoke test passed on the internal-only runtime network.\n');
+      process.stdout.write(
+        'Offline smoke test passed through the loopback gateway with an internal runtime network.\n',
+      );
     }
+  } catch (error) {
+    if (containersStarted) reportComposeDiagnosticsWithoutThrowing();
+    throw error;
   } finally {
     const down = docker([...composeArguments, 'down', '--volumes', '--remove-orphans']);
     if (down.status !== 0) process.stderr.write(`${down.stdout}${down.stderr}`);

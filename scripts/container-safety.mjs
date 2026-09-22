@@ -37,6 +37,81 @@ export function checkNginxRuntimeConfig(configuration, configPath) {
   }
 }
 
+function yamlBlock(source, key, indentation) {
+  const lines = source.replaceAll('\r\n', '\n').split('\n');
+  const marker = `${' '.repeat(indentation)}${key}:`;
+  const start = lines.findIndex((line) => line === marker);
+  if (start === -1) throw new Error(`Compose is missing ${key}.`);
+  let end = lines.length;
+  for (let index = start + 1; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (line.trim().length === 0) continue;
+    const leadingSpaces = line.length - line.trimStart().length;
+    if (leadingSpaces <= indentation) {
+      end = index;
+      break;
+    }
+  }
+  return lines.slice(start + 1, end);
+}
+
+function serviceList(compose, service, key) {
+  const block = yamlBlock(compose, service, 2);
+  const marker = `${' '.repeat(4)}${key}:`;
+  const start = block.findIndex((line) => line.startsWith(marker));
+  if (start === -1) return null;
+  const inline = block[start].slice(marker.length).trim();
+  if (inline.startsWith('[') && inline.endsWith(']')) {
+    return inline
+      .slice(1, -1)
+      .split(',')
+      .map((entry) => entry.trim())
+      .filter(Boolean);
+  }
+  const entries = [];
+  for (let index = start + 1; index < block.length; index += 1) {
+    const match = block[index].match(/^ {6}-\s+(.+)$/);
+    if (!match) break;
+    entries.push(match[1]);
+  }
+  return entries;
+}
+
+export function checkComposeNetworkPolicy(compose) {
+  const runtime = yamlBlock(compose, 'runtime', 2);
+  if (!runtime.some((line) => /^ {4}internal:\s*true\s*$/.test(line))) {
+    throw new Error('Compose runtime network must remain internal.');
+  }
+
+  const edge = yamlBlock(compose, 'edge', 2);
+  if (edge.some((line) => /^ {4}internal:\s*true\s*$/.test(line))) {
+    throw new Error('Compose edge network must not be internal.');
+  }
+  if (!edge.some((line) => /^ {4}driver:\s*bridge\s*$/.test(line))) {
+    throw new Error('Compose edge network must use the bridge driver.');
+  }
+
+  for (const service of ['api', 'web', 'updater']) {
+    const networks = serviceList(compose, service, 'networks');
+    if (JSON.stringify(networks) !== JSON.stringify(['runtime'])) {
+      throw new Error(`Compose ${service} service must attach only to runtime.`);
+    }
+    if (serviceList(compose, service, 'ports') !== null) {
+      throw new Error(`Compose ${service} service must not publish ports.`);
+    }
+  }
+
+  const gatewayNetworks = serviceList(compose, 'gateway', 'networks');
+  if (JSON.stringify(gatewayNetworks) !== JSON.stringify(['edge', 'runtime'])) {
+    throw new Error('Compose gateway service must attach only to edge and runtime.');
+  }
+  const gatewayPorts = serviceList(compose, 'gateway', 'ports');
+  const expectedPort = "'127.0.0.1:${ATLAS_GATEWAY_PORT:-8080}:8080'";
+  if (JSON.stringify(gatewayPorts) !== JSON.stringify([expectedPort])) {
+    throw new Error('Compose gateway port must publish only on 127.0.0.1.');
+  }
+}
+
 export function isForbiddenBuildContextPath(path) {
   const normalized = path.replaceAll('\\', '/').replace(/^\.\//, '');
   const name = normalized.split('/').at(-1) ?? normalized;
@@ -127,6 +202,7 @@ export async function checkContainerSafety(root = process.cwd()) {
   }
 
   const compose = await readFile(resolve(root, 'infra/compose/compose.yaml'), 'utf8');
+  checkComposeNetworkPolicy(compose);
   for (const target of ['target: api-runtime', 'target: updater-runtime']) {
     if (!compose.includes(target)) throw new Error(`Compose is missing ${target}.`);
   }
