@@ -18,6 +18,11 @@ services:
       ATLAS_PROFILE: default
       ATLAS_REGION: iran
       ATLAS_UPDATE_MODE: disabled
+    # The active dataset is mounted read-only: the request-serving process can read snapshot
+    # resources but cannot modify, replace or delete them. Provisioning happens outside this
+    # container, so no tile-generation tooling is present in the serving image.
+    volumes:
+      - ${ATLAS_DATA_ROOT:-../../data}:/var/lib/atlas:ro
     healthcheck:
       test:
         [
@@ -53,6 +58,8 @@ services:
       ATLAS_UPDATE_MODE: disabled
       ATLAS_UPDATER_HOST: 0.0.0.0
       ATLAS_UPDATER_PORT: '3001'
+    volumes:
+      - ${ATLAS_DATA_ROOT:-../../data}:/var/lib/atlas:ro
     healthcheck:
       test:
         [

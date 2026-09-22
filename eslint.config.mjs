@@ -3,7 +3,19 @@ import globals from 'globals';
 import tseslint from 'typescript-eslint';
 
 export default tseslint.config(
-  { ignores: ['**/.validation/**', '**/dist/**', '**/coverage/**', '**/node_modules/**'] },
+  {
+    ignores: [
+      '**/.validation/**',
+      '**/dist/**',
+      '**/coverage/**',
+      '**/node_modules/**',
+      // Third-party browser assets copied verbatim from a pinned dependency by
+      // scripts/vendor-web-assets.mjs. They are not this repository's source.
+      'apps/web/public/vendor/**',
+      'playwright-report/**',
+      'test-results/**',
+    ],
+  },
   eslint.configs.recommended,
   ...tseslint.configs.recommended,
   {

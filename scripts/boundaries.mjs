@@ -104,9 +104,14 @@ export function analyzeImport({
   ) {
     violations.push(`${importerPath}: applications must not depend on another application`);
   }
-  const isProviderImport =
-    specifier.includes('/internal/providers') || /(?:^|\/)providers(?:\/|$)/.test(specifier);
-  if (importerLayer !== 'platform' && isProviderImport) {
+  // Provider-specific implementation lives under the platform package's private tree. Reaching
+  // into it from anywhere else would bypass the public contracts, whether by package specifier
+  // or by a relative path that climbs out of the importing workspace.
+  const isPrivatePlatformImport =
+    /(?:^|\/)internal(?:\/|$)/.test(specifier) ||
+    /(?:^|\/)providers(?:\/|$)/.test(specifier) ||
+    matchesPackageSpecifier(specifier, '@atlas-os/platform/internal');
+  if (importerLayer !== 'platform' && isPrivatePlatformImport) {
     violations.push(`${importerPath}: provider-specific modules are private to packages/atlas-os`);
   }
   return violations;

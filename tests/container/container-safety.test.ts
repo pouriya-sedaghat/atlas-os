@@ -1,13 +1,17 @@
-import { readFile } from 'node:fs/promises';
-import { resolve } from 'node:path';
+import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { dirname, join, resolve } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
 import {
   checkComposeNetworkPolicy,
   checkContainerSafety,
+  checkDatasetMountsAreReadOnly,
+  checkGatewayResourceRouting,
   checkNginxRuntimeConfig,
   isForbiddenBuildContextPath,
+  requiredGatewayResourceDirectives,
   requiredNginxRuntimeDirectives,
 } from '../../scripts/container-safety.mjs';
 
@@ -104,4 +108,60 @@ describe('container context and runtime safety', () => {
       }
     });
   }
+});
+
+describe('basemap resource routing and dataset mounts', () => {
+  it('requires the gateway to forward ranges and stream resource responses', async () => {
+    const configuration = await readFile(resolve('infra/gateway/nginx.conf'), 'utf8');
+    expect(() => checkGatewayResourceRouting(configuration)).not.toThrow();
+
+    for (const directive of requiredGatewayResourceDirectives) {
+      expect(() => checkGatewayResourceRouting(configuration.replace(directive, ''))).toThrow(
+        `Gateway is missing required resource directive: ${directive}`,
+      );
+    }
+  });
+
+  it('requires every dataset mount to be read-only', async () => {
+    const compose = (await readFile(resolve('infra/compose/compose.yaml'), 'utf8')).replaceAll(
+      '\r\n',
+      '\n',
+    );
+    expect(checkDatasetMountsAreReadOnly(compose)).toBeGreaterThan(0);
+
+    const writable = compose.replace(':/var/lib/atlas:ro', ':/var/lib/atlas');
+    expect(() => checkDatasetMountsAreReadOnly(writable)).toThrow(/must be read-only/);
+  });
+
+  it('refuses a Compose file that skips a hardening control on one service', async () => {
+    const compose = await readFile(resolve('infra/compose/compose.yaml'), 'utf8');
+    const weakened = compose.replace('    read_only: true\n', '');
+    const directory = await mkdtemp(join(tmpdir(), 'atlas-compose-'));
+    try {
+      await mkdir(join(directory, 'infra', 'compose'), { recursive: true });
+      await mkdir(join(directory, 'infra', 'images'), { recursive: true });
+      await mkdir(join(directory, 'infra', 'gateway'), { recursive: true });
+      await writeFile(join(directory, 'infra', 'compose', 'compose.yaml'), weakened);
+      for (const path of [
+        '.dockerignore',
+        'infra/images/server.Dockerfile',
+        'infra/images/web-nginx.conf',
+        'infra/gateway/nginx.conf',
+      ]) {
+        await copyFile(resolve(path), join(directory, path));
+      }
+      for (const manifest of [
+        'apps/api/package.json',
+        'apps/updater/package.json',
+        'packages/core/package.json',
+        'packages/atlas-os/package.json',
+      ]) {
+        await mkdir(join(directory, dirname(manifest)), { recursive: true });
+        await copyFile(resolve(manifest), join(directory, manifest));
+      }
+      await expect(checkContainerSafety(directory)).rejects.toThrow(/read_only: true/);
+    } finally {
+      await rm(directory, { force: true, recursive: true });
+    }
+  });
 });

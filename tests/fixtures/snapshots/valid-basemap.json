@@ -1,0 +1,41 @@
+{
+  "activation": "inactive",
+  "artifactVersions": {
+    "planetiler": "0.10.2",
+    "schema": "openmaptiles-compatible@3.15"
+  },
+  "basemap": {
+    "archiveBytes": 21531,
+    "attribution": "Synthetic development fixture",
+    "bounds": {
+      "east": 63.333,
+      "north": 39.782,
+      "south": 24.397,
+      "west": 44.033
+    },
+    "glyphRanges": ["0-255", "1536-1791", "65024-65279"],
+    "labelLanguages": ["fa", "en"],
+    "maxZoom": 13,
+    "mediaType": "application/vnd.pmtiles",
+    "minZoom": 0,
+    "sourceLayers": ["water", "transportation", "building", "boundary", "place"],
+    "tileCount": 201,
+    "vectorFormat": "mvt"
+  },
+  "checksums": {
+    "basemap/basemap.pmtiles": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "basemap/style.json": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  },
+  "components": {
+    "basemap": "ready"
+  },
+  "createdAt": "2026-01-01T00:00:00.000Z",
+  "region": "iran",
+  "schemaVersion": 1,
+  "snapshotId": "iran-20260101t000000z-abcdef01",
+  "source": {
+    "name": "fixture-only",
+    "timestamp": "2026-01-01T00:00:00.000Z"
+  },
+  "validation": "passed"
+}

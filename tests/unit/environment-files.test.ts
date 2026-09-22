@@ -15,6 +15,22 @@ describe('environment address safety', () => {
     expect(example).not.toContain('0.0.0.0');
   });
 
+  it('documents the provisioning variables without embedding a secret', () => {
+    const example = repositoryFile('.env.example');
+    expect(example).toContain('ATLAS_FONT_PATH=');
+    // Tooling configuration is documented as platform-internal and commented out by default.
+    expect(example).toContain('ATLAS_TILE_TOOL_KIND');
+    expect(example).not.toMatch(/^ATLAS_TILE_TOOL_KIND=/m);
+    expect(example).not.toMatch(/(?:password|secret|token|api[_-]?key)\s*=\s*\S+/i);
+  });
+
+  it('mounts the dataset read-only into every serving container', () => {
+    const compose = repositoryFile('infra/compose/compose.yaml');
+    const mounts = compose.match(/\$\{ATLAS_DATA_ROOT:[^}]*\}:[^\n]*/g) ?? [];
+    expect(mounts.length).toBeGreaterThan(0);
+    for (const mount of mounts) expect(mount).toMatch(/:ro$/);
+  });
+
   it('uses wildcard addresses only for container binds and keeps a browser-facing origin', () => {
     const compose = repositoryFile('infra/compose/compose.yaml');
     expect(compose).toContain('ATLAS_API_HOST: 0.0.0.0');
