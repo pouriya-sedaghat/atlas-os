@@ -20,6 +20,23 @@ const requiredDockerIgnoreRules = [
   'tests',
 ];
 
+export const requiredNginxRuntimeDirectives = [
+  'pid /tmp/nginx.pid;',
+  'client_body_temp_path /tmp/client_temp;',
+  'proxy_temp_path /tmp/proxy_temp;',
+  'fastcgi_temp_path /tmp/fastcgi_temp;',
+  'uwsgi_temp_path /tmp/uwsgi_temp;',
+  'scgi_temp_path /tmp/scgi_temp;',
+];
+
+export function checkNginxRuntimeConfig(configuration, configPath) {
+  for (const directive of requiredNginxRuntimeDirectives) {
+    if (!configuration.includes(directive)) {
+      throw new Error(`${configPath} is missing required runtime directive: ${directive}`);
+    }
+  }
+}
+
 export function isForbiddenBuildContextPath(path) {
   const normalized = path.replaceAll('\\', '/').replace(/^\.\//, '');
   const name = normalized.split('/').at(-1) ?? normalized;
@@ -125,6 +142,11 @@ export async function checkContainerSafety(root = process.cwd()) {
   }
   if (/\bprivileged:\s*true\b/.test(compose)) {
     throw new Error('Compose must not enable privileged containers.');
+  }
+
+  for (const configPath of ['infra/images/web-nginx.conf', 'infra/gateway/nginx.conf']) {
+    const configuration = await readFile(resolve(root, configPath), 'utf8');
+    checkNginxRuntimeConfig(configuration, configPath);
   }
 
   for (const manifestPath of [

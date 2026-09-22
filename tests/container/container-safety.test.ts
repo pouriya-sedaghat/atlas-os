@@ -1,8 +1,13 @@
+import { readFile } from 'node:fs/promises';
+import { resolve } from 'node:path';
+
 import { describe, expect, it } from 'vitest';
 
 import {
   checkContainerSafety,
+  checkNginxRuntimeConfig,
   isForbiddenBuildContextPath,
+  requiredNginxRuntimeDirectives,
 } from '../../scripts/container-safety.mjs';
 
 describe('container context and runtime safety', () => {
@@ -19,4 +24,18 @@ describe('container context and runtime safety', () => {
   it('enforces minimal production runtime stages and package payloads', async () => {
     await expect(checkContainerSafety()).resolves.toBeUndefined();
   });
+
+  for (const configPath of ['infra/images/web-nginx.conf', 'infra/gateway/nginx.conf']) {
+    it(`${configPath} requires every read-only nginx runtime path`, async () => {
+      const configuration = await readFile(resolve(configPath), 'utf8');
+      expect(() => checkNginxRuntimeConfig(configuration, configPath)).not.toThrow();
+
+      for (const directive of requiredNginxRuntimeDirectives) {
+        const incompleteConfiguration = configuration.replace(directive, '');
+        expect(() => checkNginxRuntimeConfig(incompleteConfiguration, configPath)).toThrow(
+          `${configPath} is missing required runtime directive: ${directive}`,
+        );
+      }
+    });
+  }
 });
