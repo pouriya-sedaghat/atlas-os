@@ -31,4 +31,33 @@ describe('supply-chain pinning', () => {
       /(?:FROM|image:)\s+(?:node|nginxinc\/nginx-unprivileged):[^\s@]+(?:\s|$)/,
     );
   });
+
+  it('pins the external tile tool image by immutable digest', () => {
+    const tool = repositoryFile('packages/atlas-os/src/internal/tools/planetiler.ts');
+    expect(tool).toMatch(/ghcr\.io\/[^'\s]+@sha256:[a-f0-9]{64}/);
+    expect(tool).not.toMatch(/:latest/);
+  });
+
+  it('pins every direct dependency to an exact version', () => {
+    for (const manifest of [
+      'package.json',
+      'apps/api/package.json',
+      'apps/cli/package.json',
+      'apps/updater/package.json',
+      'apps/web/package.json',
+      'packages/core/package.json',
+      'packages/atlas-os/package.json',
+    ]) {
+      const parsed = JSON.parse(repositoryFile(manifest)) as Record<
+        string,
+        Record<string, string> | undefined
+      >;
+      for (const field of ['dependencies', 'devDependencies'] as const) {
+        for (const [name, range] of Object.entries(parsed[field] ?? {})) {
+          if (range.startsWith('workspace:')) continue;
+          expect(range, `${manifest} ${field} ${name}`).toMatch(/^\d+\.\d+\.\d+/);
+        }
+      }
+    }
+  });
 });

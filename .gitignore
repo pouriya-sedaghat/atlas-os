@@ -9,3 +9,6 @@ coverage/
 .DS_Store
 .vite/
 .validation/
+apps/web/public/vendor/
+test-results/
+playwright-report/

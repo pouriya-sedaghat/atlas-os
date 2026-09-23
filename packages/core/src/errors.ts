@@ -3,7 +3,9 @@ import { PlatformError } from '@atlas-os/platform';
 export type AppErrorCode =
   | 'BAD_REQUEST'
   | 'CONFIGURATION_INVALID'
+  | 'CONFLICT'
   | 'FEATURE_UNAVAILABLE'
+  | 'NOT_FOUND'
   | 'NOT_IMPLEMENTED'
   | 'SERVICE_UNAVAILABLE'
   | 'INTERNAL_ERROR';
@@ -52,6 +54,18 @@ export function mapPlatformError(error: unknown): AppError {
         cause: error,
         details: error.details,
         statusCode: 503,
+      });
+    case 'NOT_FOUND':
+      return new AppError('NOT_FOUND', error.message, {
+        cause: error,
+        details: error.details,
+        statusCode: 404,
+      });
+    case 'CONFLICT':
+      return new AppError('CONFLICT', error.message, {
+        cause: error,
+        details: error.details,
+        statusCode: 409,
       });
     case 'NOT_IMPLEMENTED':
       return new AppError('NOT_IMPLEMENTED', error.message, {

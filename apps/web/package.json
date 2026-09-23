@@ -4,10 +4,15 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "vite build",
-    "dev": "vite --host 0.0.0.0"
+    "build": "node ../../scripts/vendor-web-assets.mjs && vite build",
+    "dev": "node ../../scripts/vendor-web-assets.mjs && vite --host 0.0.0.0",
+    "vendor:assets": "node ../../scripts/vendor-web-assets.mjs"
   },
   "dependencies": {
+    "@atlas-os/core": "workspace:*",
+    "@mapbox/mapbox-gl-rtl-text": "0.4.0",
+    "maplibre-gl": "6.10.0",
+    "pmtiles": "4.5.0",
     "react": "19.1.1",
     "react-dom": "19.1.1"
   },

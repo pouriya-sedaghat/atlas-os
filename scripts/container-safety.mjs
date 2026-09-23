@@ -37,6 +37,41 @@ export function checkNginxRuntimeConfig(configuration, configPath) {
   }
 }
 
+export const requiredGatewayResourceDirectives = [
+  'location /maps/',
+  'proxy_set_header Range $http_range;',
+  'proxy_buffering off;',
+];
+
+/**
+ * The gateway must forward byte-range requests and stream the response. Buffering a ranged read
+ * of a large archive would fill the gateway's bounded temporary filesystem.
+ */
+export function checkGatewayResourceRouting(configuration) {
+  for (const directive of requiredGatewayResourceDirectives) {
+    if (!configuration.includes(directive)) {
+      throw new Error(`Gateway is missing required resource directive: ${directive}`);
+    }
+  }
+}
+
+/**
+ * The dataset must be mounted read-only into every request-serving service, so a serving
+ * process cannot modify, replace or delete the snapshot it is publishing.
+ */
+export function checkDatasetMountsAreReadOnly(compose) {
+  const mounts = [
+    ...compose.matchAll(/^ {6}- \$\{ATLAS_DATA_ROOT:[^}]*\}:(\/[^:\s]+)(:[a-z,]+)?$/gm),
+  ];
+  if (mounts.length === 0) throw new Error('Compose does not mount the dataset into any service.');
+  for (const mount of mounts) {
+    if (mount[2] !== ':ro') {
+      throw new Error(`Dataset mount at ${mount[1]} must be read-only.`);
+    }
+  }
+  return mounts.length;
+}
+
 function yamlBlock(source, key, indentation) {
   const lines = source.replaceAll('\r\n', '\n').split('\n');
   const marker = `${' '.repeat(indentation)}${key}:`;
@@ -206,14 +241,21 @@ export async function checkContainerSafety(root = process.cwd()) {
   for (const target of ['target: api-runtime', 'target: updater-runtime']) {
     if (!compose.includes(target)) throw new Error(`Compose is missing ${target}.`);
   }
-  for (const [control, expectedCount] of [
-    ['cap_drop: [ALL]', 4],
-    ['security_opt: [no-new-privileges:true]', 4],
-    ['read_only: true', 4],
+  // Counted against the declared services rather than a fixed number, so adding a service
+  // cannot silently skip a hardening control.
+  const serviceCount = yamlBlock(compose, 'services', 0).filter((line) =>
+    /^ {2}[a-z][\w-]*:$/.test(line),
+  ).length;
+  for (const control of [
+    'cap_drop: [ALL]',
+    'security_opt: [no-new-privileges:true]',
+    'read_only: true',
   ]) {
     const actualCount = compose.split(control).length - 1;
-    if (actualCount !== expectedCount) {
-      throw new Error(`Compose must apply ${control} to all four services.`);
+    if (actualCount !== serviceCount) {
+      throw new Error(
+        `Compose must apply ${control} to all ${serviceCount} services; found ${actualCount}.`,
+      );
     }
   }
   if (/\bprivileged:\s*true\b/.test(compose)) {
@@ -224,6 +266,8 @@ export async function checkContainerSafety(root = process.cwd()) {
     const configuration = await readFile(resolve(root, configPath), 'utf8');
     checkNginxRuntimeConfig(configuration, configPath);
   }
+  checkGatewayResourceRouting(await readFile(resolve(root, 'infra/gateway/nginx.conf'), 'utf8'));
+  checkDatasetMountsAreReadOnly(compose);
 
   for (const manifestPath of [
     'apps/api/package.json',

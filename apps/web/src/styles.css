@@ -92,3 +92,116 @@ pre {
   border-color: #ff8a8a;
   color: #ffd3d3;
 }
+
+.map-section {
+  margin-bottom: 2rem;
+}
+
+.map-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.75rem;
+}
+
+.map-toolbar h2 {
+  margin: 0;
+  color: #a7f3d0;
+  font-size: 1rem;
+  letter-spacing: 0.04em;
+}
+
+.language-toggle {
+  display: flex;
+  gap: 0.35rem;
+}
+
+.language-toggle button {
+  border: 1px solid rgba(114, 230, 185, 0.3);
+  border-radius: 999px;
+  background: rgba(11, 31, 24, 0.9);
+  color: #d2e7df;
+  padding: 0.35rem 0.9rem;
+  font: inherit;
+  font-size: 0.82rem;
+  cursor: pointer;
+}
+
+.language-toggle button.active {
+  background: #72e6b9;
+  border-color: #72e6b9;
+  color: #07130f;
+  font-weight: 600;
+}
+
+.map-shell {
+  position: relative;
+  border: 1px solid rgba(114, 230, 185, 0.25);
+  border-radius: 16px;
+  overflow: hidden;
+  background: #0b1f18;
+}
+
+.map-canvas {
+  width: 100%;
+  height: clamp(320px, 55vh, 620px);
+}
+
+.map-overlay {
+  position: absolute;
+  inset: auto 0 0 0;
+  margin: 0;
+  padding: 0.7rem 1rem;
+  background: rgba(7, 19, 15, 0.92);
+  color: #d2e7df;
+  font-size: 0.85rem;
+}
+
+.map-overlay.error {
+  color: #ffd3d3;
+}
+
+.map-meta {
+  margin: 0.75rem 0 0;
+  color: #9fc4b6;
+  font-size: 0.8rem;
+}
+
+.map-meta code {
+  color: #a7f3d0;
+}
+
+.notice h2 {
+  margin-top: 0;
+  color: #a7f3d0;
+  font-size: 1rem;
+}
+
+/* The renderer's controls inherit the page palette; no external stylesheet is loaded. */
+.maplibregl-ctrl-group {
+  background: rgba(11, 31, 24, 0.92);
+}
+
+.maplibregl-ctrl-attrib {
+  background: rgba(7, 19, 15, 0.82);
+  color: #d2e7df;
+}
+
+.maplibregl-ctrl-attrib a {
+  color: #a7f3d0;
+}
+
+.map-layers {
+  position: absolute;
+  top: 0.6rem;
+  left: 0.6rem;
+  margin: 0;
+  padding: 0.3rem 0.65rem;
+  border-radius: 999px;
+  background: rgba(7, 19, 15, 0.86);
+  color: #a7f3d0;
+  font-size: 0.72rem;
+  letter-spacing: 0.02em;
+}

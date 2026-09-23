@@ -3,3 +3,6 @@ dist
 coverage
 pnpm-lock.yaml
 data
+apps/web/public/vendor
+playwright-report
+test-results

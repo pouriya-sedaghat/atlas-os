@@ -33,6 +33,8 @@ const environmentSchema = z.object({
     .string()
     .regex(/^[a-z0-9][a-z0-9_-]*$/)
     .default('iran'),
+  ATLAS_FONT_PATH: z.string().min(1).default('./assets/fonts/Vazirmatn-Regular.ttf'),
+  ATLAS_REGION_CONFIG_PATH: z.string().min(1).default(''),
   ATLAS_UPDATE_MODE: z.enum(['disabled', 'manual']).default('disabled'),
   ATLAS_UPDATER_HOST: z.string().min(1).default('127.0.0.1'),
   ATLAS_UPDATER_PORT: portFromString(3001),
@@ -42,6 +44,9 @@ export interface AppConfig {
   readonly activeSnapshotPath: string;
   readonly api: { readonly host: string; readonly port: number };
   readonly dataRoot: string;
+  /** Font the basemap's label glyphs are generated from. Domain configuration, not tooling. */
+  readonly fontPath: string;
+  readonly regionConfigPath: string;
   readonly gatewayOrigin: string;
   readonly logLevel: 'fatal' | 'error' | 'warn' | 'info' | 'debug' | 'trace';
   readonly offline: boolean;
@@ -68,11 +73,18 @@ export function loadConfig(
     activeSnapshotPath: resolve(workingDirectory, values.ATLAS_ACTIVE_SNAPSHOT_PATH),
     api: { host: values.ATLAS_API_HOST, port: values.ATLAS_API_PORT },
     dataRoot: resolve(workingDirectory, values.ATLAS_DATA_ROOT),
+    fontPath: resolve(workingDirectory, values.ATLAS_FONT_PATH),
     gatewayOrigin: values.ATLAS_GATEWAY_ORIGIN,
     logLevel: values.ATLAS_LOG_LEVEL,
     offline: values.ATLAS_OFFLINE,
     profile: values.ATLAS_PROFILE,
     region: values.ATLAS_REGION,
+    regionConfigPath: resolve(
+      workingDirectory,
+      values.ATLAS_REGION_CONFIG_PATH === ''
+        ? `./config/regions/${values.ATLAS_REGION}.yaml`
+        : values.ATLAS_REGION_CONFIG_PATH,
+    ),
     updateMode: values.ATLAS_UPDATE_MODE,
     updater: { host: values.ATLAS_UPDATER_HOST, port: values.ATLAS_UPDATER_PORT },
   };

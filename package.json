@@ -16,8 +16,9 @@
     }
   },
   "scripts": {
+    "basemap:fixture": "node scripts/provision-fixture.mjs .validation/fixture-data",
     "build": "tsc -b packages/atlas-os packages/core apps/api apps/cli apps/updater && corepack pnpm --filter @atlas-os/web build",
-    "check": "corepack pnpm format:check && corepack pnpm lint && corepack pnpm typecheck && corepack pnpm test:unit && corepack pnpm test:contract && corepack pnpm test:integration && corepack pnpm test:boundaries && corepack pnpm test:container && corepack pnpm build && corepack pnpm compose:config",
+    "check": "corepack pnpm format:check && corepack pnpm lint && corepack pnpm typecheck && corepack pnpm test:unit && corepack pnpm test:contract && corepack pnpm test:integration && corepack pnpm test:provisioning && corepack pnpm test:boundaries && corepack pnpm test:container && corepack pnpm build && corepack pnpm compose:config",
     "clean": "node scripts/clean.mjs",
     "compose:build": "docker compose -f infra/compose/compose.yaml build",
     "compose:config": "docker compose -f infra/compose/compose.yaml config",
@@ -30,18 +31,26 @@
     "test:boundaries": "vitest run tests/boundaries && node scripts/check-boundaries.mjs",
     "test:container": "vitest run tests/container && node scripts/check-container-safety.mjs",
     "test:contract": "vitest run tests/contract",
+    "test:e2e": "playwright test",
     "test:integration": "vitest run tests/integration",
     "test:offline": "node scripts/offline-smoke.mjs",
+    "test:provisioning": "vitest run tests/provisioning",
     "test:unit": "vitest run tests/unit",
-    "typecheck": "tsc -b packages/atlas-os packages/core apps/api apps/cli apps/updater --pretty false && tsc -p apps/web/tsconfig.json --noEmit --pretty false"
+    "typecheck": "tsc -b packages/atlas-os packages/core apps/api apps/cli apps/updater --pretty false && tsc -p apps/web/tsconfig.json --noEmit --pretty false",
+    "verify": "corepack pnpm check && corepack pnpm test:e2e"
   },
   "devDependencies": {
     "@eslint/js": "9.35.0",
+    "@mapbox/vector-tile": "3.0.0",
+    "@playwright/test": "1.63.0",
+    "@types/geojson": "7946.0.16",
     "@types/node": "22.20.4",
     "@types/react": "19.1.12",
     "@types/react-dom": "19.1.9",
     "eslint": "9.35.0",
     "globals": "16.3.0",
+    "pbf": "5.1.2",
+    "pmtiles": "4.5.0",
     "prettier": "3.6.2",
     "tsx": "4.20.5",
     "typescript": "5.9.2",
