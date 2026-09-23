@@ -96,6 +96,24 @@ function expect(condition, message) {
 }
 
 /**
+ * The dataset fields a failure needs in order to be diagnosable, and nothing else.
+ *
+ * `reason` is what distinguishes a missing snapshot from an unreadable or mismatched one, and it
+ * is absent on a healthy dataset. Only these public API fields are reported: never a filesystem
+ * path, environment value or manifest body.
+ */
+function describeDataset(dataset) {
+  const described = [`state=${String(dataset.state)}`];
+  if (dataset.reason !== undefined && dataset.reason !== null) {
+    described.push(`reason=${String(dataset.reason)}`);
+  }
+  if (dataset.snapshotId !== undefined && dataset.snapshotId !== null) {
+    described.push(`snapshotId=${String(dataset.snapshotId)}`);
+  }
+  return described.join(', ');
+}
+
+/**
  * Provisions a basemap snapshot on the host, exactly as an operator does, then starts the
  * runtime with that snapshot mounted read-only. The runtime itself never builds data.
  */
@@ -124,7 +142,7 @@ async function verifyRuntime(snapshotId) {
   expect(web.includes('atlas-os'), 'Web application marker was not found.');
   expect(health.status === 'ok', 'API health payload was unexpected.');
   expect(readiness.ready === true, 'API readiness payload was unexpected.');
-  expect(dataset.state === 'ready', `Dataset state was ${dataset.state}, expected ready.`);
+  expect(dataset.state === 'ready', `Dataset was not ready: ${describeDataset(dataset)}.`);
   expect(
     dataset.snapshotId === snapshotId,
     `Dataset reported snapshot ${dataset.snapshotId}, expected ${snapshotId}.`,

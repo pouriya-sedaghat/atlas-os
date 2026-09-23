@@ -1,5 +1,5 @@
 import { hostname } from 'node:os';
-import { mkdir, mkdtemp, readFile, rename, rm, unlink, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, rename, rm, unlink, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 
 import { PlatformError } from '../../errors.js';
@@ -13,6 +13,16 @@ const SLOTS_DIRECTORY = 'slots';
 const STAGING_DIRECTORY = 'tmp';
 const LOCK_DIRECTORY = 'locks';
 const LOCK_FILE = 'provisioning.lock';
+
+/**
+ * Mode a published slot root must carry.
+ *
+ * `mkdtemp` creates the staging tree as `0700`, which is right while a preparation is still
+ * private, but a slot is read by the serving containers, which run as a different, non-root user.
+ * Without the traverse bit they cannot reach the manifest or the archive inside, and the dataset
+ * resolves as unavailable even though the pointer and the files themselves are readable.
+ */
+export const PUBLISHED_SLOT_MODE = 0o755;
 
 function isMissing(error: unknown): boolean {
   return (error as NodeJS.ErrnoException | undefined)?.code === 'ENOENT';
@@ -140,6 +150,9 @@ export class SnapshotStore {
     const target = this.slotRoot(slot);
     await mkdir(join(this.#dataRoot, SLOTS_DIRECTORY), { recursive: true });
     await rm(target, { force: true, recursive: true });
+    // Opened up while the tree is still staging, so the rename that publishes it is the only
+    // step left: a crash here can never leave a promoted slot the serving user cannot enter.
+    await chmod(stagingDirectory, PUBLISHED_SLOT_MODE);
     await rename(stagingDirectory, target);
   }
 

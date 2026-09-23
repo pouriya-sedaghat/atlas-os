@@ -11,6 +11,10 @@ import {
   readArchiveTile,
 } from '../../packages/atlas-os/src/internal/pmtiles/inspect.js';
 import { sha256File } from '../../packages/atlas-os/src/internal/fs/checksum.js';
+import {
+  PUBLISHED_SLOT_MODE,
+  SnapshotStore,
+} from '../../packages/atlas-os/src/internal/snapshot/store.js';
 import { createTestPlatform, type TestPlatform } from '../helpers/snapshot.js';
 
 const contexts: TestPlatform[] = [];
@@ -360,5 +364,58 @@ describe('concurrency', () => {
     await expect(
       platform.datasets.prepareUpdate({ inputs: [], sourceName: 'after' }),
     ).resolves.toBeTypeOf('string');
+  });
+});
+
+describe('published slot permissions', () => {
+  // Permission bits are only meaningful on POSIX hosts; the lifecycle assertions below are not.
+  const posix = process.platform !== 'win32';
+
+  it('keeps a staging tree private until it is published', async () => {
+    const { dataRoot } = await platformContext();
+    const staging = await new SnapshotStore(dataRoot).createStagingDirectory();
+
+    // A preparation in flight is nobody else's business.
+    if (posix) expect((await stat(staging)).mode & 0o777).toBe(0o700);
+  });
+
+  it('publishes a slot the serving user can enter', async () => {
+    const { dataRoot, platform } = await platformContext();
+    const snapshotId = await platform.datasets.prepareUpdate({
+      inputs: [],
+      sourceName: 'published',
+    });
+    const slotRoot = join(dataRoot, 'slots', 'blue');
+
+    if (posix) {
+      const mode = (await stat(slotRoot)).mode & 0o777;
+      // `mkdtemp` stages at 0o700. A slot left that way is readable only by the operator who
+      // built it, so the serving containers — which run as a different, non-root user — cannot
+      // traverse into it and the dataset resolves as unavailable.
+      expect(mode).toBe(PUBLISHED_SLOT_MODE);
+      expect(mode).not.toBe(0o700);
+      expect(mode & 0o005).toBe(0o005);
+      // Readable, never writable, for anyone but the owner.
+      expect(mode & 0o022).toBe(0);
+    }
+
+    // The payload the slot publishes is intact, and nothing was made executable.
+    const manifest = await readManifest(dataRoot, 'blue');
+    expect(manifest).toMatchObject({ snapshotId });
+    const archive = join(slotRoot, 'basemap', 'basemap.pmtiles');
+    const archiveStats = await stat(archive);
+    expect(archiveStats.size).toBeGreaterThan(0);
+    if (posix) expect(archiveStats.mode & 0o111).toBe(0);
+
+    // The lifecycle is unchanged: the snapshot still validates, activates and resolves ready.
+    const report = await platform.datasets.validateSnapshot(snapshotId);
+    expect(report.valid).toBe(true);
+    await platform.datasets.activateSnapshot(snapshotId);
+    expect(await readPointer(dataRoot)).toMatchObject({ slot: 'blue', snapshotId });
+    await expect(platform.atlas.datasetStatus()).resolves.toMatchObject({
+      snapshotId,
+      state: 'ready',
+    });
+    await expect(platform.atlas.basemap()).resolves.toMatchObject({ availability: 'ready' });
   });
 });
