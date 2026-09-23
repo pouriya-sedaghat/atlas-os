@@ -38,7 +38,9 @@ Configuration is validated at startup. Relative paths resolve from the process w
 | `ATLAS_UPDATER_PORT`         | `3001`                                 | Updater health port                          |
 
 `.env.example` has no secrets. Applications do not load dotenv files; supply variables through the
-shell, a process supervisor, or Compose.
+shell, a process supervisor, or Compose. To set one for the current session, use
+`export ATLAS_API_PORT=3100` in a POSIX shell, `$env:ATLAS_API_PORT = "3100"` in PowerShell, or
+`set ATLAS_API_PORT=3100` in Command Prompt.
 
 ### Provisioning tooling
 
@@ -76,12 +78,22 @@ API process is composed without the ability to perform it.
 
 ```sh
 pnpm build
-pnpm basemap:fixture              # prepares, validates and activates into .validation/fixture-data
-ATLAS_DATA_ROOT=.validation/fixture-data pnpm --filter @atlas-os/api start
+pnpm basemap:fixture
+pnpm api:start:fixture
 ```
+
+`pnpm basemap:fixture` prepares, validates and activates a snapshot into `.validation/fixture-data`,
+and `pnpm api:start:fixture` starts the API against it. Both run as written in PowerShell, Command
+Prompt and POSIX shells.
 
 This generates a small synthetic archive with the same source layers, attributes and label
 languages as a production build. It is a test scaffold, not a map of any territory.
+
+`pnpm api:start:fixture` passes the API an absolute data root. Pointing
+`pnpm --filter @atlas-os/api start` at the fixture with a relative path does not work: pnpm runs a
+package's script from that package's directory, so the path would resolve beneath `apps/api`. The
+command keeps `ATLAS_DATA_ROOT` and `ATLAS_ACTIVE_SNAPSHOT_PATH` if you have already set them, and
+reports what to run if the API has not been built or the fixture has not been provisioned.
 
 ### Production, from operator-supplied inputs
 
@@ -103,6 +115,8 @@ Which inputs a preparation requires is derived from the layers the basemap style
 
 Obtain each file through your own approved channel and place it on the host. None of them is ever
 downloaded by this software, and none is committed. Record each in `DATA_SOURCES.md`.
+
+On the Linux host that will hold the dataset, from a POSIX shell:
 
 ```sh
 export ATLAS_DATA_ROOT=/var/lib/atlas
@@ -220,6 +234,8 @@ If Docker is unavailable, these commands are unexecuted — not passed — and m
 host before release.
 
 ## Compose runtime
+
+On a Linux host, from a POSIX shell:
 
 ```sh
 export ATLAS_DATA_ROOT=/var/lib/atlas
