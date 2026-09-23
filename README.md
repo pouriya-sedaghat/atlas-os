@@ -37,9 +37,13 @@ Prerequisites are Node.js 22.14 or later and pnpm 10.17.1.
 ```sh
 pnpm install --frozen-lockfile
 pnpm build
-pnpm basemap:fixture                                    # a small synthetic basemap, no download
-ATLAS_DATA_ROOT=.validation/fixture-data pnpm --filter @atlas-os/api start
+pnpm basemap:fixture
+pnpm api:start:fixture
 ```
+
+`pnpm basemap:fixture` provisions a small synthetic basemap with no download, and
+`pnpm api:start:fixture` starts the API against it. These commands contain no shell-specific
+syntax, so they run as written in PowerShell, Command Prompt and POSIX shells.
 
 In another terminal:
 
@@ -74,7 +78,7 @@ pnpm lint              pnpm test:integration     pnpm compose:build
 pnpm typecheck         pnpm test:provisioning    pnpm images:inspect
 pnpm test              pnpm test:boundaries      pnpm test:offline
 pnpm basemap:fixture   pnpm test:container       pnpm test:e2e
-pnpm check             pnpm verify
+pnpm check             pnpm verify               pnpm api:start:fixture
 ```
 
 `pnpm check` is the complete gate that needs no browser and no Docker daemon. `pnpm verify` adds

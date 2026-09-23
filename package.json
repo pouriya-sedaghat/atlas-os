@@ -16,6 +16,7 @@
     }
   },
   "scripts": {
+    "api:start:fixture": "node scripts/start-fixture-api.mjs",
     "basemap:fixture": "node scripts/provision-fixture.mjs .validation/fixture-data",
     "build": "tsc -b packages/atlas-os packages/core apps/api apps/cli apps/updater && corepack pnpm --filter @atlas-os/web build",
     "check": "corepack pnpm format:check && corepack pnpm lint && corepack pnpm typecheck && corepack pnpm test:unit && corepack pnpm test:contract && corepack pnpm test:integration && corepack pnpm test:provisioning && corepack pnpm test:boundaries && corepack pnpm test:container && corepack pnpm build && corepack pnpm compose:config",
