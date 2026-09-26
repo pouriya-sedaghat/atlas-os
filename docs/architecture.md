@@ -13,6 +13,7 @@ apps/web ----HTTP----> apps/api --\
 apps/api --------------------------\
 apps/cli --------------------------- > packages/core -> packages/atlas-os
 apps/updater ----------------------/
+apps/search-host ------------------/
 ```
 
 The Web application uses only same-origin HTTP at runtime; it imports contract _types_ from core
@@ -75,13 +76,47 @@ operator-supplied inputs (regional extract + reference geometry + coastline poly
 The synthetic builder replaces only the first two steps. Everything downstream is identical, which
 is why the automated tests exercise the real pipeline without any download.
 
+## M2 search data flow
+
+```text
+the same operator-supplied regional extract the basemap is built from
+   -> database builder, reverse-only, no updates, offline, no network (provisioning image only)
+      -> database export
+         -> Atlas post-processing: strict schema, canonical search-only variants under the
+            private language `qaa`, canonical house numbers and postcodes with the originals
+            kept, the unique engine import instant, and the generation canary
+            -> engine import into staging -> seal (run-time output removed, exact modes, no
+               host path, per-file SHA-256, tree digest)
+               -> extract re-hashed: it must still be the bytes the basemap build hashed
+                  -> the real engine proves the sealed database from a disposable copy and the
+                     probes it answers are recorded
+                     -> schema-2 manifest -> full validation -> promotion into the inactive slot
+                        -> search host for that slot: copy, verify, start, prove, open
+                           -> GET /v1/search and /v1/reverse through the generation guard
+```
+
+The search half is decided and run inside the platform, like the basemap half: core and the
+applications see only neutral requests and outcomes. A preparation is basemap-only (schema 1)
+when search tooling is not selected; schema-1 snapshots stay valid, activatable and rollback
+targets, and report search as `component_missing`.
+
+The guard, the private host protocol and the reasons for this design are in
+[ADR 0001](adr/0001-offline-search.md).
+
 ## Processes
 
 - **gateway** provides one browser origin and routes `/` to Web, `/api/*` to API and `/maps/*` to
   the API's resource reader with buffering disabled so byte ranges stream.
-- **web** renders operational status and, when a basemap is installed, the map. No remote assets.
-- **api** provides liveness, readiness, capability, dataset and basemap endpoints, and serves
-  versioned basemap resources from a read-only mount of the active snapshot.
+- **web** renders operational status and, when a basemap is installed, the map, place search and
+  explicit reverse geocoding. No remote assets.
+- **api** provides liveness, readiness, capability, dataset, basemap, search and reverse endpoints,
+  and serves versioned basemap resources from a read-only mount of the active snapshot. It is the
+  only process that talks to the search hosts.
+- **search-blue** and **search-green** are private search hosts, one per slot, each in its own
+  container and network namespace. Each reads only its own slot, read-only, keeps its engine's
+  working copy only in its own named volume, runs the engine on loopback only, and answers a small
+  private protocol on the internal network. Neither publishes a port, and each runs under hard
+  memory and PID limits the operator sets.
 - **cli** reports local state and performs operator-initiated dataset provisioning.
 - **updater** is a separate process with its own health endpoint and update-connectivity state.
 
@@ -132,8 +167,26 @@ snapshot serves correctly however the gateway is reached. The Web application re
 paths against its own origin before handing the style to the renderer, which requires an absolute
 sprite URL; that adaptation lives in the application that owns the renderer.
 
-## What M1 does not add
+## Search contract
 
-No search, reverse geocoding, routing, matrix, isochrone or map matching; no raster basemap,
-imagery, terrain or traffic; no scheduled downloader, replication or public network call; no new
-data service. Those remain represented as `not_installed` capability states and typed errors.
+`GET /v1/search?q&limit&language&lat&lon` and `GET /v1/reverse?lat&lon&language` are strict:
+unknown or duplicated parameters, over-long or under-length queries, control characters and
+out-of-range numbers are refused with `400 BAD_REQUEST` and a bounded field and reason. Queries are
+canonicalised exactly as the indexed variants were. A reverse point outside the snapshot's bounds
+is answered with an empty result without consulting the engine. Answers carry the snapshot, the
+data attribution and results with stable `osm:node|way|relation:<id>` identifiers, never an
+engine identifier; they are never cached.
+
+Search availability is one resolution shared by capabilities, dataset status, readiness, CLI
+status and doctor, the routes and the Web. When search cannot answer, `503 FEATURE_UNAVAILABLE`
+names why — `not_installed`, `component_missing`, `dataset_unavailable`, `starting`,
+`generation_mismatch`, `dataset_changed`, `timeout`, `saturated` or `insufficient_space` — whether
+to retry, and a bounded `Retry-After`. An engine answer that cannot be understood is a fixed,
+neutral `502 UPSTREAM_FAILED`. A search problem never degrades the basemap.
+
+## What M2 does not add
+
+No routing, matrix, isochrone or map matching; no raster basemap, imagery, terrain or traffic; no
+scheduled downloader, replication or public network call. Those remain represented as
+`not_installed` capability states and typed errors. Search quality at the scale of a real region
+is not yet measured; see [`DATA_SOURCES.md`](../DATA_SOURCES.md).

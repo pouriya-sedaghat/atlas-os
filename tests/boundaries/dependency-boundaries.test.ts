@@ -146,20 +146,21 @@ describe('dependency boundary enforcement', () => {
 
   it('keeps provider and tooling identifiers out of core and the applications', () => {
     // Provider selection and provider-specific execution configuration belong inside the
-    // platform package. Core passes neutral provisioning intent and the raw environment; it must
+    // platform package. That includes the search engine, its build tools and its datastore. Core passes neutral provisioning intent and the raw environment; it must
     // not know that a tile tool exists, which one is selected, or how it runs.
     // Tool and vendor identifiers, the tool's own source names, and its execution
     // configuration. Neutral data-role names such as `coastline_polygons` and
     // `lake_centerlines` are public contract terms describing what the data is, so they are
     // deliberately absent from this list.
     const forbidden =
-      /planetiler|openmaptiles|maplibre|pmtiles|natural[_-]?earth|water[_-]?polygons|tile[_-]?tool|basemap[_-]?builder|ATLAS_TILE_TOOL|ATLAS_BASEMAP_BUILDER|--\w+_path\b/i;
+      /planetiler|openmaptiles|maplibre|pmtiles|natural[_-]?earth|water[_-]?polygons|tile[_-]?tool|basemap[_-]?builder|ATLAS_TILE_TOOL|ATLAS_BASEMAP_BUILDER|--\w+_path\b|photon|nominatim|opensearch|komoot|osm2pgsql|postgis|pelias|ATLAS_SEARCH_TOOL/i;
 
     const roots = [
       resolve('packages/core/src'),
       resolve('apps/api/src'),
       resolve('apps/cli/src'),
       resolve('apps/updater/src'),
+      resolve('apps/search-host/src'),
     ];
 
     const offenders: string[] = [];

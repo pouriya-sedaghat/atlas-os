@@ -16,6 +16,7 @@ import {
 import type { ArchiveSummary } from '../pmtiles/inspect.js';
 import { findRepresentativeTile, inspectArchive } from '../pmtiles/inspect.js';
 import { decodeTileLayers } from '../mvt/decode.js';
+import { isEngineArtifact, validateSearchComponent } from './validate-search.js';
 
 type CheckStatus = 'passed' | 'failed';
 
@@ -98,7 +99,11 @@ export async function validateSnapshotTree(context: ValidationContext): Promise<
     `Basemap declares ${basemap.tileCount} tiles across zoom ${basemap.minZoom}-${basemap.maxZoom}.`,
   );
 
-  const checksumEntries = Object.entries(resolved.checksums);
+  // A sealed search database is verified file by file, against its digest and its exact file
+  // set, by the search checks below; hashing it twice would double the cost on a large region.
+  const checksumEntries = Object.entries(resolved.checksums).filter(
+    ([path]) => resolved.schemaVersion !== 2 || !isEngineArtifact(path),
+  );
   if (checksumEntries.length === 0) {
     checks.fail('checksums', 'Snapshot records no artifact checksums.');
   } else {
@@ -285,6 +290,10 @@ export async function validateSnapshotTree(context: ValidationContext): Promise<
     checks.pass('bounds', 'Geographic bounds have increasing axes.');
   } else {
     checks.fail('bounds', 'Geographic bounds are inverted or empty.');
+  }
+
+  if (resolved.schemaVersion === 2) {
+    await validateSearchComponent(checks, resolved, context.snapshotRoot);
   }
 
   return checks.report();

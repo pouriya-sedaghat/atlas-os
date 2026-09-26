@@ -1,8 +1,11 @@
-import { useEffect, useMemo, useState } from 'react';
+import type { PlaceAttribution, PlaceResult, SearchLanguage } from '@atlas-os/core';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
-import type { PlatformSnapshot } from './api.js';
-import { readPlatformSnapshot } from './api.js';
+import type { PlaceAnswer, PlatformSnapshot } from './api.js';
+import { describePoint, readPlatformSnapshot } from './api.js';
+import type { MapControls, MapCoordinate, MapSelection } from './BasemapMap.js';
 import { BasemapMap } from './BasemapMap.js';
+import { AttributionNote, MESSAGES, PlaceSearch, addressLine } from './PlaceSearch.js';
 
 type LoadState =
   | { readonly state: 'loading' }
@@ -24,9 +27,44 @@ function capabilitySummary(snapshot: PlatformSnapshot): readonly string[] {
     .map(([name]) => name);
 }
 
+const REVERSE_MESSAGES: Readonly<
+  Record<SearchLanguage, { readonly pick: string; readonly centre: string; readonly none: string }>
+> = {
+  en: {
+    centre: 'Describe map centre',
+    none: 'Nothing is recorded at this point.',
+    pick: 'Describe a point on the map',
+  },
+  fa: {
+    centre: 'توصیف مرکز نقشه',
+    none: 'در این نقطه چیزی ثبت نشده است.',
+    pick: 'توصیف یک نقطه روی نقشه',
+  },
+};
+
+type Described =
+  | { readonly state: 'idle' }
+  | { readonly state: 'describing' }
+  | {
+      readonly state: 'described';
+      readonly place: PlaceResult | null;
+      readonly attribution: PlaceAttribution;
+    }
+  | { readonly state: 'message'; readonly message: string };
+
+function searchLanguage(language: string): SearchLanguage {
+  return language === 'en' ? 'en' : 'fa';
+}
+
 export function App() {
   const [loadState, setLoadState] = useState<LoadState>({ state: 'loading' });
   const [language, setLanguage] = useState('fa');
+  const [refresh, setRefresh] = useState(0);
+  const [selection, setSelection] = useState<MapSelection | null>(null);
+  const [picking, setPicking] = useState(false);
+  const [described, setDescribed] = useState<Described>({ state: 'idle' });
+  const controls = useRef<MapControls | null>(null);
+  const describeSequence = useRef(0);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -38,9 +76,74 @@ export function App() {
       },
     );
     return () => controller.abort();
+  }, [refresh]);
+
+  // An answer from another snapshot means the dataset changed under the page: re-read it.
+  const onSnapshotChanged = useCallback(() => {
+    setSelection(null);
+    setDescribed({ state: 'idle' });
+    setRefresh((value) => value + 1);
+  }, []);
+
+  const select = useCallback((place: PlaceResult) => {
+    setSelection((previous) => ({
+      bounds: place.bounds,
+      coordinate: place.coordinate,
+      key: (previous?.key ?? 0) + 1,
+      kind: place.kind,
+      name: place.name,
+    }));
   }, []);
 
   const basemap = loadState.state === 'ready' ? loadState.value.basemap : undefined;
+  const searchCapability =
+    loadState.state === 'ready' ? loadState.value.capabilities.features.search : undefined;
+  // Disabled only when the dataset has no search at all; a starting engine still takes queries
+  // and answers truthfully that it is starting.
+  const searchInstalled =
+    searchCapability !== undefined &&
+    (searchCapability.available || searchCapability.reason !== 'not_installed');
+  const activeSnapshot = basemap?.availability === 'ready' ? basemap.snapshotId : null;
+  const placeLanguage = searchLanguage(language);
+
+  const describe = useCallback(
+    (coordinate: MapCoordinate) => {
+      if (activeSnapshot === null) return;
+      const ticket = (describeSequence.current += 1);
+      setPicking(false);
+      setDescribed({ state: 'describing' });
+      const done = (answer: PlaceAnswer) => {
+        if (ticket !== describeSequence.current) return;
+        if (answer.kind !== 'ok') {
+          const text = MESSAGES[placeLanguage];
+          setDescribed({
+            message:
+              answer.kind === 'unavailable'
+                ? answer.reason === 'starting'
+                  ? text.starting
+                  : answer.reason === 'not_installed' || answer.reason === 'component_missing'
+                    ? text.notInstalled
+                    : text.unavailable
+                : text.failed,
+            state: 'message',
+          });
+          return;
+        }
+        if (answer.snapshotId !== activeSnapshot) {
+          onSnapshotChanged();
+          return;
+        }
+        const place = answer.results[0] ?? null;
+        setDescribed({ attribution: answer.attribution, place, state: 'described' });
+        if (place !== null) select(place);
+      };
+      describePoint(coordinate, placeLanguage, new AbortController().signal).then(done, () =>
+        done({ kind: 'failed' }),
+      );
+    },
+    [activeSnapshot, onSnapshotChanged, placeLanguage, select],
+  );
+
   const unavailable = useMemo(
     () => (loadState.state === 'ready' ? capabilitySummary(loadState.value) : []),
     [loadState],
@@ -87,7 +190,73 @@ export function App() {
               ))}
             </div>
           </div>
-          <BasemapMap descriptor={basemap} language={language} />
+          <PlaceSearch
+            installed={searchInstalled}
+            language={placeLanguage}
+            onSelect={select}
+            onSnapshotChanged={onSnapshotChanged}
+            snapshotId={basemap.snapshotId}
+          />
+          <div
+            className="reverse-actions"
+            role="group"
+            aria-label={REVERSE_MESSAGES[placeLanguage].pick}
+          >
+            <button
+              aria-pressed={picking}
+              className={picking ? 'active' : ''}
+              data-testid="reverse-pick"
+              disabled={!searchInstalled}
+              onClick={() => setPicking((value) => !value)}
+              type="button"
+            >
+              {REVERSE_MESSAGES[placeLanguage].pick}
+            </button>
+            <button
+              data-testid="reverse-centre"
+              disabled={!searchInstalled}
+              onClick={() => {
+                const centre = controls.current?.center();
+                if (centre !== undefined) describe(centre);
+              }}
+              type="button"
+            >
+              {REVERSE_MESSAGES[placeLanguage].centre}
+            </button>
+          </div>
+          <BasemapMap
+            descriptor={basemap}
+            language={language}
+            onPick={describe}
+            onReady={(value) => {
+              controls.current = value;
+            }}
+            picking={picking}
+            selection={selection}
+          />
+          <section
+            aria-live="polite"
+            className="reverse-result"
+            data-testid="reverse-result"
+            dir="auto"
+            lang={placeLanguage}
+          >
+            {described.state === 'describing' && <p>{MESSAGES[placeLanguage].searching}</p>}
+            {described.state === 'message' && <p>{described.message}</p>}
+            {described.state === 'described' && (
+              <>
+                {described.place === null ? (
+                  <p>{REVERSE_MESSAGES[placeLanguage].none}</p>
+                ) : (
+                  <p data-place-id={described.place.id}>
+                    <strong>{described.place.name}</strong>{' '}
+                    <span>{addressLine(described.place)}</span>
+                  </p>
+                )}
+                <AttributionNote attribution={described.attribution} />
+              </>
+            )}
+          </section>
           <p className="map-meta" data-testid="map-meta">
             Snapshot <code>{basemap.snapshotId}</code> · {basemap.vectorFormat.toUpperCase()} in{' '}
             {basemap.mediaType} · zoom {basemap.minZoom}–{basemap.maxZoom}

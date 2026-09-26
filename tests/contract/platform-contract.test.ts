@@ -99,12 +99,30 @@ describe('public platform contracts', () => {
     }
   });
 
-  it('keeps every non-basemap capability unavailable with a typed error', async () => {
+  it('reports search and reverse geocoding as typed unavailable values, not exceptions', async () => {
+    const { atlas } = context.platform;
+    const coordinate = { latitude: 35.6892, longitude: 51.389 };
+    // The shared context has a basemap-only (schema 1) snapshot active, so search is missing
+    // from the active generation rather than failing.
+    const unavailable = {
+      outcome: 'unavailable',
+      reason: 'component_missing',
+      retryable: false,
+      retryAfterSeconds: null,
+    };
+
+    await expect(atlas.search({ language: 'fa', limit: 5, query: 'Tehran' })).resolves.toEqual(
+      unavailable,
+    );
+    await expect(atlas.reverseGeocode({ coordinate, language: 'fa' })).resolves.toEqual(
+      unavailable,
+    );
+  });
+
+  it('keeps every other non-basemap capability unavailable with a typed error', async () => {
     const { atlas } = context.platform;
     const coordinate = { latitude: 35.6892, longitude: 51.389 };
 
-    await expect(atlas.search({ query: 'Tehran' })).rejects.toBeInstanceOf(PlatformError);
-    await expect(atlas.reverseGeocode({ coordinate })).rejects.toBeInstanceOf(PlatformError);
     await expect(
       atlas.route({ mode: 'car', waypoints: [coordinate, coordinate] }),
     ).rejects.toBeInstanceOf(PlatformError);

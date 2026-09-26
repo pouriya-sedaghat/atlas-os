@@ -402,13 +402,84 @@ process.stdout.write(
 `;
 }
 
+/** What the search serving image must, and must never, contain. */
+export const SEARCH_IMAGE_POLICY = {
+  engineArchive: {
+    bytes: 98219380,
+    path: '/opt/atlas-os/engine/engine.jar',
+    sha256: 'a89707c0045e4807b2a1180e132e68e108d998709f48b6c94b98a6e281f571a5',
+  },
+  forbiddenPaths: [
+    '/opt/atlas-os/build',
+    '/opt/atlas-os/nominatim-venv',
+    '/usr/bin/osm2pgsql',
+    '/usr/bin/psql',
+    '/usr/bin/python3',
+    '/usr/lib/postgresql',
+    '/usr/share/postgresql',
+    '/workspace',
+  ],
+  java: '/opt/java/openjdk/bin/java',
+  licenses: '/opt/atlas-os/engine/licenses',
+  uid: 10001,
+  workRoot: '/var/lib/atlas-engine',
+};
+
+/** The search-specific audit, executed inside the search serving image. */
+export function searchImageAudit() {
+  return String.raw`
+const crypto = require('node:crypto');
+const fs = require('node:fs');
+const { spawnSync } = require('node:child_process');
+const policy = ${JSON.stringify(SEARCH_IMAGE_POLICY)};
+
+if (process.getuid() !== policy.uid) throw new Error('search host does not run as ' + policy.uid);
+const archive = fs.statSync(policy.engineArchive.path);
+if (archive.size !== policy.engineArchive.bytes) throw new Error('engine archive size differs');
+if ((archive.mode & 0o777) !== 0o444 || archive.uid !== 0) {
+  throw new Error('engine archive must be root-owned and read-only');
+}
+const digest = crypto.createHash('sha256').update(fs.readFileSync(policy.engineArchive.path)).digest('hex');
+if (digest !== policy.engineArchive.sha256) throw new Error('engine archive digest differs');
+const java = spawnSync(policy.java, ['-version'], { encoding: 'utf8' });
+if (java.status !== 0 || !/version "21\./.test(java.stderr)) throw new Error('Java 21 runtime is missing');
+for (const forbidden of policy.forbiddenPaths) {
+  if (fs.existsSync(forbidden)) throw new Error('provisioning or build payload leaked: ' + forbidden);
+}
+const work = fs.statSync(policy.workRoot);
+if (work.uid !== policy.uid || (work.mode & 0o777) !== 0o700) {
+  throw new Error('search work root must belong only to the search user');
+}
+if (fs.readdirSync(policy.licenses).length === 0) throw new Error('engine licences are missing');
+if (process.env.ATLAS_SEARCH_ENGINE_ARCHIVE !== policy.engineArchive.path) {
+  throw new Error('engine archive is not configured');
+}
+process.stdout.write(JSON.stringify({ engine: digest, java: java.stderr.split('\n')[0] }) + '\n');
+`;
+}
+
 function docker(arguments_) {
   return spawnSync('docker', arguments_, { encoding: 'utf8', stdio: 'pipe' });
 }
 
 export function inspectRuntimeImages() {
-  const images = ['atlas-os/api:m0', 'atlas-os/updater:m0'];
+  const images = ['atlas-os/api:m0', 'atlas-os/updater:m0', 'atlas-os/search:m2'];
   const audit = applicationAudit();
+  const search = docker([
+    'run',
+    '--rm',
+    '--entrypoint',
+    'node',
+    'atlas-os/search:m2',
+    '-e',
+    searchImageAudit(),
+  ]);
+  if (search.error || search.status !== 0) {
+    throw new Error(
+      `Search image audit failed: ${search.error ?? ''}${search.stdout}${search.stderr}`,
+    );
+  }
+  process.stdout.write(`atlas-os/search:m2 engine: ${search.stdout}`);
   for (const image of images) {
     const result = docker(['run', '--rm', '--entrypoint', 'node', image, '-e', audit]);
     if (result.error || result.status !== 0) {

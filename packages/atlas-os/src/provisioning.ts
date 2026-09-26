@@ -4,6 +4,7 @@ import { join, relative, sep } from 'node:path';
 import type { DatasetInput, SnapshotId, ValidationReport } from './contracts.js';
 import { PlatformError } from './errors.js';
 import type { SlotName, SnapshotManifest } from './snapshot.js';
+import { searchComponentOf } from './snapshot.js';
 import { createSnapshotId } from './validation.js';
 import {
   ARCHIVE_FILE,
@@ -20,6 +21,7 @@ import { sha256Bytes, sha256File } from './internal/fs/checksum.js';
 import { buildGlyphRanges } from './internal/glyphs/build.js';
 import { BASEMAP_ICONS, buildSpriteSheet } from './internal/sprites/build.js';
 import { inspectArchive } from './internal/pmtiles/inspect.js';
+import { searchClusterMayBeRunning, type SearchPipeline } from './internal/search/pipeline.js';
 import type { SnapshotStore } from './internal/snapshot/store.js';
 import { validateSnapshotTree } from './internal/snapshot/validate.js';
 
@@ -43,6 +45,8 @@ export interface ProvisionerOptions {
   readonly fontPath: string;
   readonly labelLanguages: readonly string[];
   readonly region: string;
+  /** Present when snapshots carry search; built from the same source as the basemap. */
+  readonly search?: SearchPipeline | undefined;
   readonly store: SnapshotStore;
 }
 
@@ -81,7 +85,7 @@ export class BasemapProvisioner {
       const slot = await store.inactiveSlot();
       const staging = await store.createStagingDirectory();
       try {
-        const snapshotId = await this.#buildInto(staging, request);
+        const snapshotId = await this.#buildInto(staging, request, slot);
         const report = await validateSnapshotTree({
           expectedRegion: this.#options.region,
           snapshotRoot: staging,
@@ -102,8 +106,10 @@ export class BasemapProvisioner {
         await store.promoteStaging(staging, slot);
         return snapshotId;
       } catch (error) {
-        // A failed preparation must leave no trace and must never touch the active pointer.
-        await store.discardStaging(staging);
+        // A failed preparation never touches the active pointer. Only preserve the private
+        // staging tree if the database builder has not proved PostgreSQL stopped: deleting its
+        // files while it may still run is unsafe, particularly with local tooling.
+        if (!(await searchClusterMayBeRunning(staging))) await store.discardStaging(staging);
         throw error;
       }
     });
@@ -175,8 +181,14 @@ export class BasemapProvisioner {
     return slot;
   }
 
-  async #buildInto(staging: string, request: BasemapPreparationRequest): Promise<SnapshotId> {
-    const { bounds, builder, fontPath, labelLanguages, region } = this.#options;
+  async #buildInto(
+    staging: string,
+    request: BasemapPreparationRequest,
+    slot: SlotName,
+  ): Promise<SnapshotId> {
+    const { bounds, builder, fontPath, labelLanguages, region, search, store } = this.#options;
+    // Fixed once: the search generation is bound to it, so it must not drift during the build.
+    const sourceTimestamp = request.sourceTimestamp ?? new Date().toISOString();
     const basemapDirectory = join(staging, BASEMAP_DIRECTORY);
     await mkdir(join(basemapDirectory, GLYPHS_DIRECTORY, FONTSTACK), { recursive: true });
 
@@ -235,38 +247,80 @@ export class BasemapProvisioner {
     await writeFile(stylePath, styleBytes);
     checksums[posixRelative(staging, stylePath)] = sha256Bytes(styleBytes);
 
-    const manifest: SnapshotManifest = {
-      activation: 'inactive',
-      artifactVersions: {
-        [build.tool.name]: build.tool.version,
-        schema: `${build.schema.name}@${build.schema.version}`,
-      },
-      basemap: {
-        archiveBytes: (await stat(archivePath)).size,
-        attribution: build.attribution,
+    let searchResult: Awaited<ReturnType<SearchPipeline['build']>> | undefined;
+    if (search !== undefined) {
+      const recorded = build.inputs.find((input) => input.kind === 'region_extract');
+      const supplied = request.inputs.find((input) => input.kind === 'region_extract');
+      const other = await store
+        .readManifest(slot === 'blue' ? 'green' : 'blue')
+        .catch(() => undefined);
+      searchResult = await search.build({
         bounds: build.bounds,
-        glyphRanges: glyphRanges.map((artifact) => artifact.range),
-        labelLanguages: [...labelLanguages],
-        maxZoom: build.maxZoom,
-        mediaType: 'application/vnd.pmtiles',
-        minZoom: build.minZoom,
-        sourceLayers: [...build.sourceLayers],
-        tileCount: summary.tileCount,
-        vectorFormat: 'mvt',
-      },
-      checksums,
-      components: { basemap: 'ready' },
-      createdAt: new Date().toISOString(),
-      inputs: [...build.inputs],
-      region,
-      schemaVersion: 1,
-      snapshotId,
-      source: {
-        name: request.sourceName,
-        timestamp: request.sourceTimestamp ?? new Date().toISOString(),
-      },
-      validation: 'passed',
+        extract:
+          recorded === undefined || supplied === undefined
+            ? undefined
+            : { bytes: recorded.bytes, checksum: recorded.checksum, path: supplied.path },
+        forbiddenPaths: [store.dataRoot, ...request.inputs.map((input) => input.path)],
+        otherImportDate:
+          other === undefined ? undefined : searchComponentOf(other)?.engine.importDate,
+        snapshotId,
+        sourceTimestamp,
+        staging,
+      });
+    }
+
+    const artifactVersions = {
+      [build.tool.name]: build.tool.version,
+      schema: `${build.schema.name}@${build.schema.version}`,
     };
+    const basemap = {
+      archiveBytes: (await stat(archivePath)).size,
+      attribution: build.attribution,
+      bounds: build.bounds,
+      glyphRanges: glyphRanges.map((artifact) => artifact.range),
+      labelLanguages: [...labelLanguages],
+      maxZoom: build.maxZoom,
+      mediaType: 'application/vnd.pmtiles' as const,
+      minZoom: build.minZoom,
+      sourceLayers: [...build.sourceLayers],
+      tileCount: summary.tileCount,
+      vectorFormat: 'mvt' as const,
+    };
+    const source = { name: request.sourceName, timestamp: sourceTimestamp };
+
+    // Basemap-only preparations keep writing exactly the schema-1 manifest they always wrote, so
+    // nothing that reads them changes. A snapshot with search is schema 2.
+    const manifest: SnapshotManifest =
+      searchResult === undefined
+        ? {
+            activation: 'inactive',
+            artifactVersions,
+            basemap,
+            checksums,
+            components: { basemap: 'ready' },
+            createdAt: new Date().toISOString(),
+            inputs: [...build.inputs],
+            region,
+            schemaVersion: 1,
+            snapshotId,
+            source,
+            validation: 'passed',
+          }
+        : {
+            activation: 'inactive',
+            artifactVersions,
+            basemap,
+            checksums: { ...checksums, ...searchResult.checksums },
+            components: { basemap: 'ready', search: 'ready' },
+            createdAt: new Date().toISOString(),
+            inputs: [...build.inputs],
+            region,
+            schemaVersion: 2,
+            search: searchResult.component,
+            snapshotId,
+            source,
+            validation: 'passed',
+          };
 
     await writeFile(join(staging, MANIFEST_FILE), `${JSON.stringify(manifest, null, 2)}\n`);
     return snapshotId;

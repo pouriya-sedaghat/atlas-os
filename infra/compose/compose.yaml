@@ -17,6 +17,8 @@ services:
       ATLAS_OFFLINE: 'true'
       ATLAS_PROFILE: default
       ATLAS_REGION: iran
+      ATLAS_SEARCH_ENGINE_BLUE_URL: http://search-blue:2322
+      ATLAS_SEARCH_ENGINE_GREEN_URL: http://search-green:2322
       ATLAS_UPDATE_MODE: disabled
     # The active dataset is mounted read-only: the request-serving process can read snapshot
     # resources but cannot modify, replace or delete them. Provisioning happens outside this
@@ -42,6 +44,90 @@ services:
     tmpfs:
       - /tmp:size=16m,mode=1777
     stop_grace_period: 15s
+
+  # One private search host per slot, each in its own container and network namespace. The
+  # engine inside listens on loopback only; the host answers on the internal runtime network and
+  # publishes no port. The slots are mounted read-only; the engine's disposable working copy lives
+  # only in the host's own named volume.
+  search-blue:
+    image: atlas-os/search:m2
+    build:
+      context: ../..
+      dockerfile: infra/images/search.Dockerfile
+      target: search-runtime
+    environment:
+      ATLAS_DATA_ROOT: /var/lib/atlas
+      ATLAS_OFFLINE: 'true'
+      ATLAS_REGION: iran
+      ATLAS_SEARCH_ENGINE_HEAP: ${ATLAS_SEARCH_ENGINE_HEAP:-1g}
+      ATLAS_SEARCH_SLOT: blue
+    volumes:
+      - ${ATLAS_DATA_ROOT:-../../data}:/var/lib/atlas:ro
+      - search-blue-work:/var/lib/atlas-engine
+    # Hard limits for the whole container: the host, the engine's heap and everything beyond it.
+    # They bound the container; they are not a size for any region. Set them from a measured run.
+    mem_limit: ${ATLAS_SEARCH_HOST_MEMORY_LIMIT:-2g}
+    memswap_limit: ${ATLAS_SEARCH_HOST_MEMORY_LIMIT:-2g}
+    pids_limit: ${ATLAS_SEARCH_HOST_PIDS_LIMIT:-1024}
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:2322/v1/status').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+    networks: [runtime]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    stop_grace_period: 30s
+
+  search-green:
+    image: atlas-os/search:m2
+    build:
+      context: ../..
+      dockerfile: infra/images/search.Dockerfile
+      target: search-runtime
+    environment:
+      ATLAS_DATA_ROOT: /var/lib/atlas
+      ATLAS_OFFLINE: 'true'
+      ATLAS_REGION: iran
+      ATLAS_SEARCH_ENGINE_HEAP: ${ATLAS_SEARCH_ENGINE_HEAP:-1g}
+      ATLAS_SEARCH_SLOT: green
+    volumes:
+      - ${ATLAS_DATA_ROOT:-../../data}:/var/lib/atlas:ro
+      - search-green-work:/var/lib/atlas-engine
+    # Hard limits for the whole container: the host, the engine's heap and everything beyond it.
+    # They bound the container; they are not a size for any region. Set them from a measured run.
+    mem_limit: ${ATLAS_SEARCH_HOST_MEMORY_LIMIT:-2g}
+    memswap_limit: ${ATLAS_SEARCH_HOST_MEMORY_LIMIT:-2g}
+    pids_limit: ${ATLAS_SEARCH_HOST_PIDS_LIMIT:-1024}
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:2322/v1/status').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+    networks: [runtime]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    stop_grace_period: 30s
 
   updater:
     image: atlas-os/updater:m0
@@ -132,3 +218,7 @@ networks:
     driver: bridge
   edge:
     driver: bridge
+
+volumes:
+  search-blue-work:
+  search-green-work:

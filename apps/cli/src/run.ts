@@ -6,6 +6,7 @@ import {
   createProvisioningComposition,
   type ApplicationComposition,
   type DatasetInput,
+  type DoctorResult,
 } from '@atlas-os/core';
 
 import { parseArguments } from './arguments.js';
@@ -70,7 +71,7 @@ const USAGE = [
   '                       [--reference-features <path>] [--coastline-polygons <path>]',
   '                       [--lake-centerlines <path>] [--source-timestamp <iso-8601>]',
   'atlas-os update validate <snapshot-id>',
-  'atlas-os update activate <snapshot-id>',
+  'atlas-os update activate <snapshot-id> [--activate-while-search-starting]',
   'atlas-os rollback',
 ] as const;
 
@@ -126,21 +127,105 @@ async function statusCommand(composition: ApplicationComposition): Promise<Comma
   }
 }
 
+type Check = DoctorResult['checks'][number];
+
+/** The search check exactly as the local API resolved it, if it is well formed. */
+function apiSearchCheck(ready: unknown): Check | undefined {
+  const checks = (ready as { checks?: unknown } | null)?.checks;
+  if (!Array.isArray(checks)) return undefined;
+  const found = checks.find((check) => (check as { name?: unknown }).name === 'search') as
+    | { name: unknown; status: unknown; message: unknown }
+    | undefined;
+  if (
+    found === undefined ||
+    (found.status !== 'pass' && found.status !== 'warn' && found.status !== 'fail') ||
+    typeof found.message !== 'string' ||
+    found.message.length > 500
+  ) {
+    return undefined;
+  }
+  return { message: found.message, name: 'search', status: found.status };
+}
+
 async function doctorCommand(composition: ApplicationComposition): Promise<CommandResult> {
   const apiOrigin = `http://${composition.config.api.host}:${composition.config.api.port}`;
   const local = await composition.service.doctor();
+  // Search availability is resolved once, by the serving API that can reach the engine hosts.
+  // This process reports that resolution rather than a second, local opinion of its own.
+  const withSearch = (search: Check) =>
+    local.checks.map((check) => (check.name === 'search' ? search : check));
   try {
-    await readLocalApi('/ready', apiOrigin);
+    const ready = await readLocalApi('/ready', apiOrigin);
+    const search = apiSearchCheck(ready) ?? {
+      message: 'The local API did not report a search state.',
+      name: 'search',
+      status: 'warn' as const,
+    };
     return {
       code: local.healthy ? EXIT.ok : EXIT.failure,
-      output: { ...local, localApi: 'reachable', ok: local.healthy },
+      output: { ...local, checks: withSearch(search), localApi: 'reachable', ok: local.healthy },
     };
   } catch (error) {
     return {
       code: EXIT.failure,
-      output: { ...local, localApi: 'unreachable', message: String(error), ok: false },
+      output: {
+        ...local,
+        checks: withSearch({
+          message: 'Search state is reported by the local API, which is unreachable.',
+          name: 'search',
+          status: 'warn',
+        }),
+        localApi: 'unreachable',
+        message: String(error),
+        ok: false,
+      },
     };
   }
+}
+
+/** The explicitly named override for activating before the standby search engine is ready. */
+export const ACTIVATE_WHILE_SEARCH_STARTING = 'activate-while-search-starting';
+
+/**
+ * Whether the standby search engine is ready for exactly this snapshot, as the serving API sees
+ * it. Activation normally waits for this, so switching the pointer never leaves search starting.
+ */
+async function searchReadiness(
+  composition: ApplicationComposition,
+  snapshotId: string,
+): Promise<{ readonly ready: true } | { readonly ready: false; readonly details: JsonObject }> {
+  const snapshots = await composition.service.listSnapshots();
+  const target = snapshots.find((snapshot) => snapshot.snapshotId === snapshotId);
+  // Basemap-only snapshots, and unknown ones the platform will refuse anyway, need no engine.
+  if (target === undefined || !target.hasSearch) return { ready: true };
+
+  const apiOrigin = `http://${composition.config.api.host}:${composition.config.api.port}`;
+  let dataset: unknown;
+  try {
+    dataset = await readLocalApi('/v1/dataset', apiOrigin);
+  } catch {
+    return { details: { localApi: 'unreachable' }, ready: false };
+  }
+  const standby = (dataset as { standby?: unknown } | null)?.standby as
+    | { snapshotId?: unknown; search?: { state?: unknown; reason?: unknown } }
+    | null
+    | undefined;
+  if (
+    standby?.snapshotId === snapshotId &&
+    standby.search?.state === 'ready' &&
+    (standby.search as { snapshotId?: unknown }).snapshotId === snapshotId
+  ) {
+    return { ready: true };
+  }
+  return {
+    details: {
+      search:
+        standby?.snapshotId === snapshotId && typeof standby.search?.reason === 'string'
+          ? standby.search.reason
+          : 'not_standby',
+    },
+    ready: false,
+  };
 }
 
 /**
@@ -209,8 +294,34 @@ async function updateCommand(
 
     if (subcommand === 'activate') {
       if (snapshotId === undefined) return usageResult();
+      const override = flags[ACTIVATE_WHILE_SEARCH_STARTING];
+      if (override !== undefined && override !== 'true') return usageResult();
+      if (override === undefined) {
+        const readiness = await searchReadiness(composition, snapshotId);
+        if (!readiness.ready) {
+          return {
+            code: EXIT.conflict,
+            output: {
+              code: 'SEARCH_NOT_READY',
+              details: { ...readiness.details, override: `--${ACTIVATE_WHILE_SEARCH_STARTING}` },
+              message:
+                'The search engine for this snapshot is not ready. Retry when it is, or activate ' +
+                'anyway and search will report that it is starting until it is.',
+              ok: false,
+              retryable: true,
+            },
+          };
+        }
+      }
       await composition.service.activateSnapshot(snapshotId as never);
-      return { code: EXIT.ok, output: { activated: snapshotId, ok: true } };
+      return {
+        code: EXIT.ok,
+        output: {
+          activated: snapshotId,
+          ok: true,
+          ...(override === undefined ? {} : { searchReadiness: 'not_checked' }),
+        },
+      };
     }
   } catch (error) {
     if (error instanceof AppError && error.code === 'BAD_REQUEST') {

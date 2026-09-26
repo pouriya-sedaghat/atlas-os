@@ -9,6 +9,12 @@ import { SyntheticTileBuilder } from './internal/builders/synthetic.js';
 import type { BasemapTileBuilder } from './internal/builders/types.js';
 import { LocalBasemapResourceReader } from './internal/basemap/reader.js';
 import { REQUIRED_SOURCE_LAYERS } from './internal/basemap/style.js';
+import { EngineHostClient } from './internal/search/client.js';
+import { readSearchEngines } from './internal/search/config.js';
+import { SearchPipeline } from './internal/search/pipeline.js';
+import { createSearchToolRunner } from './internal/search/runner.js';
+import { readSearchToolConfig } from './internal/search/tools.js';
+import { SearchService } from './internal/search/service.js';
 import { SnapshotStore } from './internal/snapshot/store.js';
 import { readToolConfig } from './internal/tools/config.js';
 import { LocalAtlasOs, LocalDatasetManager } from './platform.js';
@@ -51,6 +57,19 @@ export interface Platform {
   readonly resources: BasemapResourceReader;
 }
 
+/**
+ * The search half of a preparation, or `undefined` for basemap-only snapshots. Read only in a
+ * process that provisions, so a serving process never needs, or validates, tooling settings.
+ */
+function createSearchPipeline(
+  environment: Readonly<Record<string, string | undefined>>,
+): SearchPipeline | undefined {
+  const tiles = readToolConfig(environment);
+  const config = readSearchToolConfig(environment, tiles.kind);
+  if (config.kind === 'none') return undefined;
+  return new SearchPipeline({ kind: config.kind, runner: createSearchToolRunner(config) });
+}
+
 function createBuilder(
   environment: Readonly<Record<string, string | undefined>>,
 ): BasemapTileBuilder {
@@ -81,11 +100,19 @@ export function createPlatform(options: PlatformOptions): Platform {
           fontPath: provisioning.fontPath,
           labelLanguages: provisioning.labelLanguages,
           region: options.region,
+          search: createSearchPipeline(environment),
           store,
         });
 
+  const search = new SearchService({
+    client: new EngineHostClient(),
+    engines: readSearchEngines(environment),
+    region: options.region,
+    store,
+  });
+
   return {
-    atlas: new LocalAtlasOs({ region: options.region, store }),
+    atlas: new LocalAtlasOs({ region: options.region, search, store }),
     datasets: new LocalDatasetManager({ offline: options.offline, provisioner, store }),
     resources: new LocalBasemapResourceReader(store),
   };

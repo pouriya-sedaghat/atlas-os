@@ -1,4 +1,9 @@
-import { AppError, type ApplicationComposition } from '@atlas-os/core';
+import {
+  AppError,
+  type ApplicationComposition,
+  type PlaceQueryOutcome,
+  type SearchParameters,
+} from '@atlas-os/core';
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
 
 export interface ErrorResponse {
@@ -83,6 +88,73 @@ async function serveResource(
   await reply.send(result.body);
 }
 
+/**
+ * Every query parameter exactly as sent, values in order. Read from the raw request line rather
+ * than a parsed query object, so a duplicated parameter can never be silently merged or dropped.
+ */
+export function rawQueryParameters(url: string | undefined): SearchParameters {
+  const query = new URL(url ?? '/', 'http://api.invalid').searchParams;
+  const parameters: Record<string, string[]> = {};
+  for (const [key, value] of query) (parameters[key] ??= []).push(value);
+  return parameters;
+}
+
+/**
+ * Maps a place query outcome onto HTTP. Total: every outcome has exactly one response, and none
+ * carries anything the engine said.
+ */
+async function sendPlaceOutcome(
+  outcome: PlaceQueryOutcome,
+  request: FastifyRequest,
+  reply: FastifyReply,
+): Promise<void> {
+  reply.header('cache-control', 'no-store');
+  switch (outcome.outcome) {
+    case 'ok':
+      await reply.code(200).send({
+        attribution: outcome.attribution,
+        requestId: request.id,
+        results: outcome.results,
+        snapshotId: outcome.snapshotId,
+      });
+      return;
+    case 'invalid_request':
+      await reply.code(400).send({
+        error: {
+          code: 'BAD_REQUEST',
+          details: { field: outcome.field, reason: outcome.reason },
+          message: 'The request parameters are invalid.',
+          requestId: request.id,
+        },
+      });
+      return;
+    case 'unavailable':
+      if (outcome.retryAfterSeconds !== null) {
+        reply.header('retry-after', String(outcome.retryAfterSeconds));
+      }
+      await reply.code(503).send({
+        error: {
+          code: 'FEATURE_UNAVAILABLE',
+          details: { reason: outcome.reason, retryable: outcome.retryable },
+          message: 'Search is unavailable.',
+          requestId: request.id,
+        },
+      });
+      return;
+    case 'upstream_failed':
+      await reply
+        .code(502)
+        .send(
+          errorBody(
+            'UPSTREAM_FAILED',
+            'The search service returned an unusable answer.',
+            request.id,
+          ),
+        );
+      return;
+  }
+}
+
 export function buildApiServer(
   composition: ApplicationComposition,
   options: { readonly logger?: boolean } = {},
@@ -120,6 +192,24 @@ export function buildApiServer(
     ...(await composition.service.basemap()),
     requestId: request.id,
   }));
+
+  // Read-only place queries. Parameters are validated strictly by the platform; there is no
+  // mutation route of any kind here.
+  server.get('/v1/search', async (request, reply) => {
+    await sendPlaceOutcome(
+      await composition.service.searchPlaces(rawQueryParameters(request.raw.url)),
+      request,
+      reply,
+    );
+  });
+
+  server.get('/v1/reverse', async (request, reply) => {
+    await sendPlaceOutcome(
+      await composition.service.reverseGeocode(rawQueryParameters(request.raw.url)),
+      request,
+      reply,
+    );
+  });
 
   // Dataset administration is deliberately absent: there is no HTTP route that prepares,
   // activates or rolls back a snapshot, and this process is composed without provisioning.

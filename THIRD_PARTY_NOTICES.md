@@ -59,6 +59,33 @@ The schema's layers also consume small-scale reference geometry and pre-processe
 polygons in addition to the OpenStreetMap extract. Those are operator-supplied data, each with its
 own licence, and none of them is redistributed here.
 
+## Search engine
+
+Photon 1.3.0 (Apache-2.0) answers search and reverse geocoding. It is not an npm dependency: the
+search images carry the pinned release archive,
+`https://github.com/komoot/photon/releases/download/1.3.0/photon-1.3.0.jar` (98,219,380 bytes,
+SHA-256 `a89707c0045e4807b2a1180e132e68e108d998709f48b6c94b98a6e281f571a5`), verified by digest and
+size. Its licence and the notices of the components it bundles — assembled from each component's
+own official artifact, not from the archive's single merged notice — are in
+[`infra/images/search/licenses/`](infra/images/search/licenses/) and are copied into the serving
+image beside the archive. Some bundled components are offered under a choice of licences, and some
+ship no licence text in their artifacts; both are listed there and in
+[supply-chain controls](docs/supply-chain.md).
+
+The serving image also carries the Eclipse Temurin 21 Java runtime (GPL-2.0 with the Classpath
+Exception), pinned to
+`eclipse-temurin:21.0.12_8-jre-noble@sha256:7739f0ffce786528961eea6bf46d9610ee968ac6127c9b2e93494757bdecce9f`,
+with its own legal notices under `/opt/java/openjdk/legal`.
+
+## Search provisioning tooling
+
+The local-only search provisioning image (`infra/images/search-build.Dockerfile`) installs
+Nominatim 5.3.2 (`nominatim-db`, GPL-3.0-or-later) and its hash-locked Python dependencies,
+osm2pgsql 1.11.0 and PostGIS 3.4.2 (both GPL-2.0-or-later), PostgreSQL 16 (PostgreSQL Licence) and
+nss_wrapper (BSD-3-Clause) from a dated Ubuntu snapshot. It is used only during an explicit,
+offline preparation; it is never part of the serving stack, never started by Compose, and not
+published. Distributing it would require a licence and corresponding-source decision by the owner.
+
 ## Bundled font
 
 `assets/fonts/Vazirmatn-Regular.ttf` — Vazirmatn 33.0.3, Copyright 2015 The Vazirmatn Project
@@ -69,6 +96,9 @@ software provided this notice and the licence accompany it.
 
 ## Container foundations
 
+- Node.js `22.14.0-bookworm-slim` pinned to manifest digest
+  `sha256:1c18d9ab3af4585870b92e4dbc5cac5a0dc77dd13df1a5905cea89fc720eb05b` for the search host
+  (the Debian image includes separately licensed system packages).
 - Node.js `22.14.0-alpine3.21` pinned to manifest digest
   `sha256:9bef0ef1e268f60627da9ba7d7605e8831d5b56ad07487d24d1aa386336d1944` (Node.js is MIT; the
   Alpine image includes separately licensed system packages).

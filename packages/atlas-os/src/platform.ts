@@ -11,10 +11,11 @@ import type {
   MapMatchResult,
   MatrixRequest,
   MatrixResult,
-  PlaceResult,
+  PlaceQueryOutcome,
   ReverseGeocodeRequest,
   RouteRequest,
   RouteResult,
+  SearchComponentStatus,
   SearchRequest,
   SnapshotDescription,
   SnapshotId,
@@ -29,12 +30,31 @@ import {
   unavailableBasemap,
 } from './internal/basemap/descriptor.js';
 import { resolveDataset } from './internal/basemap/availability.js';
+import type { SearchService } from './internal/search/service.js';
 import type { SnapshotStore } from './internal/snapshot/store.js';
+import { searchComponentOf } from './snapshot.js';
 import type { BasemapPreparationRequest } from './provisioning.js';
 import type { BasemapProvisioner } from './provisioning.js';
 
 const NOT_INSTALLED: CapabilityState = { available: false, reason: 'not_installed' };
 const DATASET_UNAVAILABLE: CapabilityState = { available: false, reason: 'dataset_unavailable' };
+
+/**
+ * Projects search availability onto the capability vocabulary. Search and reverse geocoding are
+ * one component, so they are always reported together.
+ */
+function searchCapability(status: SearchComponentStatus): CapabilityState {
+  if (status.state === 'ready') return { available: true, version: status.snapshotId };
+  switch (status.reason) {
+    case 'not_installed':
+    case 'component_missing':
+      return NOT_INSTALLED;
+    case 'starting':
+      return { available: false, reason: 'starting' };
+    default:
+      return DATASET_UNAVAILABLE;
+  }
+}
 
 function capabilityUnavailable(name: string): never {
   throw new PlatformError('CAPABILITY_UNAVAILABLE', `The ${name} capability is not installed.`, {
@@ -50,10 +70,16 @@ function capabilityUnavailable(name: string): never {
  */
 export class LocalAtlasOs implements AtlasOs {
   readonly #region: string;
+  readonly #search: SearchService;
   readonly #store: SnapshotStore;
 
-  constructor(options: { readonly region: string; readonly store: SnapshotStore }) {
+  constructor(options: {
+    readonly region: string;
+    readonly search: SearchService;
+    readonly store: SnapshotStore;
+  }) {
     this.#region = options.region;
+    this.#search = options.search;
     this.#store = options.store;
   }
 
@@ -65,6 +91,7 @@ export class LocalAtlasOs implements AtlasOs {
         : resolution.state === 'absent'
           ? NOT_INSTALLED
           : DATASET_UNAVAILABLE;
+    const search = searchCapability(await this.#search.activeStatus(resolution));
 
     return {
       features: {
@@ -72,9 +99,9 @@ export class LocalAtlasOs implements AtlasOs {
         isochrones: NOT_INSTALLED,
         map_matching: NOT_INSTALLED,
         matrix: NOT_INSTALLED,
-        reverse_geocoding: NOT_INSTALLED,
+        reverse_geocoding: search,
         routing: NOT_INSTALLED,
-        search: NOT_INSTALLED,
+        search,
       },
       schemaVersion: 1,
     };
@@ -82,13 +109,18 @@ export class LocalAtlasOs implements AtlasOs {
 
   async datasetStatus(): Promise<DatasetStatus> {
     const resolution = await resolveDataset(this.#store, this.#region);
+    const [search, standby] = await Promise.all([
+      this.#search.activeStatus(resolution),
+      this.#search.standby(resolution),
+    ]);
     if (resolution.state === 'absent') {
-      return { region: this.#region, state: 'not_installed' };
+      return { region: this.#region, search, standby, state: 'not_installed' };
     }
     if (resolution.state === 'unavailable') {
       return {
         reason: resolution.detail,
         region: this.#region,
+        search,
         snapshotId: resolution.snapshotId as SnapshotId | null,
         state: 'degraded',
       };
@@ -96,7 +128,9 @@ export class LocalAtlasOs implements AtlasOs {
     return {
       activatedAt: resolution.activatedAt,
       region: this.#region,
+      search,
       snapshotId: resolution.manifest.snapshotId,
+      standby,
       state: 'ready',
     };
   }
@@ -113,12 +147,12 @@ export class LocalAtlasOs implements AtlasOs {
     return descriptor ?? unavailableBasemap('basemap_missing', 'The snapshot carries no basemap.');
   }
 
-  async search(_request: SearchRequest): Promise<readonly PlaceResult[]> {
-    return capabilityUnavailable('search');
+  async search(request: SearchRequest): Promise<PlaceQueryOutcome> {
+    return this.#search.search(request);
   }
 
-  async reverseGeocode(_request: ReverseGeocodeRequest): Promise<PlaceResult> {
-    return capabilityUnavailable('reverse geocoding');
+  async reverseGeocode(request: ReverseGeocodeRequest): Promise<PlaceQueryOutcome> {
+    return this.#search.reverse(request);
   }
 
   async route(_request: RouteRequest): Promise<RouteResult> {
@@ -209,6 +243,7 @@ export class LocalDatasetManager implements DatasetManager {
       active: pointer?.snapshotId === record.manifest.snapshotId,
       createdAt: record.manifest.createdAt,
       hasBasemap: record.manifest.basemap !== undefined,
+      hasSearch: searchComponentOf(record.manifest) !== undefined,
       region: record.manifest.region,
       snapshotId: record.manifest.snapshotId,
       source: {

@@ -4,7 +4,7 @@ Normal user requests are served by local processes from local data. Internet acc
 for explicitly operator-initiated provisioning; it is never a readiness dependency for the Web
 application, the API, or the basemap.
 
-## What this means in M1
+## What this means
 
 - The Web bundle contains no CDN, hosted style, hosted glyph, hosted sprite, hosted font,
   analytics or telemetry URL. The renderer, its worker, and the right-to-left text plugin are all
@@ -19,10 +19,20 @@ application, the API, or the basemap.
 - Starting with no dataset at all is a valid, healthy mode.
 - Package and image downloads are provisioning activities, not runtime behaviour.
 
+## Search is offline too
+
+Search and reverse geocoding are answered by the local search hosts from the local, sealed search
+database. There is no public or hosted geocoder behind them and no fallback to one. The engine
+makes no request of its own at runtime; the database builder runs only during an explicit
+preparation, inside a container with no network. Nothing is downloaded: the regional extract comes
+from the operator.
+
 ## Network topology
 
-`api`, `web` and `updater` attach only to an `internal: true` Compose network, so they have no
-route off the host. The `gateway` additionally attaches to a normal bridge network, because
+`api`, `web`, `updater`, `search-blue` and `search-green` attach only to an `internal: true`
+Compose network, so they have no route off the host. The engine inside each search host listens
+on loopback in that host's own network namespace, so not even the other services on the internal
+network can reach it; only the host's private port answers there. The `gateway` additionally attaches to a normal bridge network, because
 publishing a host port requires one; that is the single service with an external route, and it is
 published only on `127.0.0.1`. It has no upstream outside the deployment: its only `proxy_pass`
 targets are the `api` and `web` services.
@@ -65,7 +75,9 @@ The browser suite fails if the page contacts any origin other than loopback, so 
 reference is caught rather than merely discouraged. The offline smoke test provisions a snapshot on
 the host, mounts it read-only, and verifies the gateway, Web application, API health and readiness,
 the ready dataset and basemap states, a ranged archive read and `416` handling, local style, glyph
-and sprite resources, traversal rejection, the locally served text plugin, and the updater's
-offline state — then removes its stack.
+and sprite resources, traversal rejection, the locally served text plugin, Persian search and
+reverse geocoding answered for the exact active snapshot, that the engine ports are unreachable
+from the internal network, that the search hosts cannot write to the dataset and publish no port,
+and the updater's offline state — then removes its stack and volumes.
 
 A future update attempt may be deferred or retried while the active snapshot continues serving.
