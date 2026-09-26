@@ -205,3 +205,126 @@ pre {
   font-size: 0.72rem;
   letter-spacing: 0.02em;
 }
+
+/* Place search and reverse geocoding. Everything here is local: no image, font or icon is
+   fetched, and the marker is a plain element. */
+.place-search {
+  position: relative;
+  margin-bottom: 0.75rem;
+}
+
+.search-label {
+  display: block;
+  margin-bottom: 0.35rem;
+  color: #a7f3d0;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.search-field input {
+  width: 100%;
+  border: 1px solid rgba(114, 230, 185, 0.35);
+  border-radius: 12px;
+  background: rgba(7, 19, 15, 0.9);
+  color: inherit;
+  font: inherit;
+  padding: 0.7rem 0.9rem;
+}
+
+.search-field input:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.place-search input:focus-visible,
+.reverse-actions button:focus-visible,
+.language-toggle button:focus-visible,
+.search-attribution a:focus-visible {
+  outline: 3px solid #fbbf24;
+  outline-offset: 2px;
+}
+
+.search-results {
+  position: absolute;
+  z-index: 5;
+  inset-inline: 0;
+  margin: 0.25rem 0 0;
+  padding: 0.25rem;
+  list-style: none;
+  border: 1px solid rgba(114, 230, 185, 0.35);
+  border-radius: 12px;
+  background: #0b1f18;
+  max-height: 18rem;
+  overflow: auto;
+}
+
+.search-results li {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  padding: 0.5rem 0.65rem;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.search-results li.active,
+.search-results li[aria-selected='true'] {
+  background: rgba(114, 230, 185, 0.18);
+  outline: 2px solid #72e6b9;
+}
+
+.result-context {
+  color: #9fbfb1;
+  font-size: 0.8rem;
+}
+
+.search-status,
+.search-attribution {
+  margin: 0.35rem 0 0;
+  color: #9fbfb1;
+  font-size: 0.8rem;
+}
+
+.search-attribution a {
+  color: #a7f3d0;
+}
+
+.reverse-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.reverse-actions button {
+  border: 1px solid rgba(114, 230, 185, 0.35);
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  padding: 0.4rem 0.9rem;
+  cursor: pointer;
+}
+
+.reverse-actions button.active {
+  background: rgba(114, 230, 185, 0.2);
+}
+
+.reverse-actions button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.reverse-result {
+  min-height: 1.5rem;
+  margin-top: 0.75rem;
+}
+
+.place-marker {
+  width: 18px;
+  height: 18px;
+  border: 3px solid #07130f;
+  border-radius: 50%;
+  background: #fbbf24;
+  box-shadow: 0 0 0 3px rgba(251, 191, 36, 0.45);
+}

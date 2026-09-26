@@ -1,9 +1,9 @@
-import type { BasemapDescriptor } from '@atlas-os/core';
+import type { BasemapDescriptor, GeographicBounds, PlaceKind } from '@atlas-os/core';
 import type {
   DataDrivenPropertyValueSpecification,
   ErrorEvent as MapErrorEvent,
 } from 'maplibre-gl';
-import { Map as MapLibreMap, NavigationControl, ScaleControl } from 'maplibre-gl';
+import { Map as MapLibreMap, Marker, NavigationControl, ScaleControl } from 'maplibre-gl';
 import { useEffect, useRef, useState } from 'react';
 
 import 'maplibre-gl/dist/maplibre-gl.css';
@@ -17,9 +17,60 @@ export type LabelLanguage = string;
 
 type ReadyBasemap = Extract<BasemapDescriptor, { availability: 'ready' }>;
 
+export interface MapCoordinate {
+  readonly latitude: number;
+  readonly longitude: number;
+}
+
+/** A place to show on the map. `key` changes whenever the same place is chosen again. */
+export interface MapSelection {
+  readonly key: number;
+  readonly name: string;
+  readonly coordinate: MapCoordinate;
+  readonly bounds?: GeographicBounds | undefined;
+  readonly kind?: PlaceKind | undefined;
+}
+
+export interface MapControls {
+  center(): MapCoordinate;
+}
+
 export interface BasemapMapProps {
   readonly descriptor: ReadyBasemap;
   readonly language: LabelLanguage;
+  readonly selection?: MapSelection | null;
+  /** While true, a click on the map picks that point instead of panning. */
+  readonly picking?: boolean;
+  readonly onPick?: (coordinate: MapCoordinate) => void;
+  readonly onReady?: (controls: MapControls) => void;
+}
+
+/** How close to fly for each kind of place, when there is no extent to fit. */
+const KIND_ZOOM: Readonly<Record<PlaceKind, number>> = {
+  city: 11,
+  country: 5,
+  county: 9,
+  district: 13,
+  house: 17,
+  locality: 14,
+  other: 15,
+  state: 7,
+  street: 16,
+};
+
+function prefersReducedMotion(): boolean {
+  return globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
+}
+
+/** A plain, accessible DOM marker: no image, nothing fetched. */
+function markerElement(name: string): HTMLElement {
+  const element = document.createElement('div');
+  element.className = 'place-marker';
+  element.setAttribute('role', 'img');
+  element.setAttribute('aria-label', name);
+  element.dataset['testid'] = 'place-marker';
+  element.title = name;
+  return element;
 }
 
 /** Layer identifiers currently producing geometry, reported for operator diagnostics. */
@@ -42,9 +93,24 @@ function labelExpression(
   ] as unknown as DataDrivenPropertyValueSpecification<string>;
 }
 
-export function BasemapMap({ descriptor, language }: BasemapMapProps) {
+export function BasemapMap({
+  descriptor,
+  language,
+  onPick,
+  onReady,
+  picking = false,
+  selection = null,
+}: BasemapMapProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
+  const markerRef = useRef<Marker | null>(null);
+  const pickingRef = useRef(picking);
+  const onPickRef = useRef(onPick);
+  const onReadyRef = useRef(onReady);
+  pickingRef.current = picking;
+  onPickRef.current = onPick;
+  onReadyRef.current = onReady;
+  const [camera, setCamera] = useState<'moving' | 'idle'>('idle');
   const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading');
   const [message, setMessage] = useState('');
   const [renderedLayers, setRenderedLayers] = useState<readonly string[]>([]);
@@ -88,7 +154,21 @@ export function BasemapMap({ descriptor, language }: BasemapMapProps) {
         map.addControl(new NavigationControl({ visualizePitch: false }), 'top-right');
         map.addControl(new ScaleControl({ unit: 'metric' }), 'bottom-left');
 
-        map.on('load', () => setStatus('ready'));
+        map.on('load', () => {
+          setStatus('ready');
+          onReadyRef.current?.({
+            center: () => {
+              const center = map!.getCenter();
+              return { latitude: center.lat, longitude: center.lng };
+            },
+          });
+        });
+        map.on('movestart', () => setCamera('moving'));
+        map.on('moveend', () => setCamera('idle'));
+        map.on('click', (event) => {
+          if (!pickingRef.current) return;
+          onPickRef.current?.({ latitude: event.lngLat.lat, longitude: event.lngLat.lng });
+        });
         map.on('error', (event: MapErrorEvent) => {
           setStatus('error');
           setMessage(event.error?.message ?? 'The basemap failed to load.');
@@ -105,6 +185,8 @@ export function BasemapMap({ descriptor, language }: BasemapMapProps) {
 
     return () => {
       abort.abort();
+      markerRef.current?.remove();
+      markerRef.current = null;
       // Remove the renderer before releasing the protocol, so no in-flight tile request
       // outlives its handler during a development remount.
       map?.remove();
@@ -123,10 +205,46 @@ export function BasemapMap({ descriptor, language }: BasemapMapProps) {
     }
   }, [descriptor, language, status]);
 
+  // Show a chosen place: fit its extent, or fly to a zoom that suits its kind, and mark it.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (map === null || status !== 'ready' || selection === null) return;
+    const center: [number, number] = [
+      selection.coordinate.longitude,
+      selection.coordinate.latitude,
+    ];
+    const animate = !prefersReducedMotion();
+    const { bounds } = selection;
+    if (bounds !== undefined && selection.kind !== 'house') {
+      map.fitBounds(
+        [
+          [bounds.west, bounds.south],
+          [bounds.east, bounds.north],
+        ],
+        { animate, maxZoom: 16, padding: 48 },
+      );
+    } else {
+      const zoom = Math.min(KIND_ZOOM[selection.kind ?? 'other'], descriptor.maxZoom + 3);
+      if (animate) map.flyTo({ center, essential: true, zoom });
+      else map.jumpTo({ center, zoom });
+    }
+    markerRef.current?.remove();
+    markerRef.current = new Marker({ element: markerElement(selection.name) })
+      .setLngLat(center)
+      .addTo(map);
+  }, [descriptor, selection, status]);
+
+  useEffect(() => {
+    const canvas = mapRef.current?.getCanvas();
+    if (canvas !== undefined) canvas.style.cursor = picking ? 'crosshair' : '';
+  }, [picking, status]);
+
   return (
     <div className="map-shell">
       <div
         className="map-canvas"
+        data-camera={camera}
+        data-picking={picking ? 'true' : 'false'}
         data-label-language={language}
         data-rendered-layers={renderedLayers.join(',')}
         data-testid="map-container"

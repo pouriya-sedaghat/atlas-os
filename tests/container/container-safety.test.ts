@@ -5,8 +5,11 @@ import { dirname, join, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import {
+  SEARCH_SERVICES,
   checkComposeNetworkPolicy,
   checkContainerSafety,
+  checkSearchImage,
+  checkSearchServices,
   checkDatasetMountsAreReadOnly,
   checkGatewayResourceRouting,
   checkNginxRuntimeConfig,
@@ -155,6 +158,7 @@ describe('basemap resource routing and dataset mounts', () => {
       for (const path of [
         '.dockerignore',
         'infra/images/server.Dockerfile',
+        'infra/images/search.Dockerfile',
         'infra/images/web-nginx.conf',
         'infra/gateway/nginx.conf',
       ]) {
@@ -162,6 +166,7 @@ describe('basemap resource routing and dataset mounts', () => {
       }
       for (const manifest of [
         'apps/api/package.json',
+        'apps/search-host/package.json',
         'apps/updater/package.json',
         'packages/core/package.json',
         'packages/atlas-os/package.json',
@@ -173,6 +178,177 @@ describe('basemap resource routing and dataset mounts', () => {
     } finally {
       await rm(directory, { force: true, recursive: true });
     }
+  });
+});
+
+describe('search hosts and images', () => {
+  async function compose(): Promise<string> {
+    return (await readFile(resolve('infra/compose/compose.yaml'), 'utf8')).replaceAll('\r\n', '\n');
+  }
+
+  it('accepts one isolated, read-only host per slot', async () => {
+    const source = await compose();
+    expect(() => checkSearchServices(source)).not.toThrow();
+    expect(() => checkComposeNetworkPolicy(source)).not.toThrow();
+    expect(SEARCH_SERVICES).toEqual(['search-blue', 'search-green']);
+  });
+
+  it.each([
+    [
+      'publishes a port',
+      (source: string) =>
+        changeServiceBlock(source, 'search-blue', (block) =>
+          block.replace(
+            '    networks: [runtime]',
+            "    ports: ['127.0.0.1:2322:2322']\n    networks: [runtime]",
+          ),
+        ),
+      checkComposeNetworkPolicy,
+      /must not publish ports/,
+    ],
+    [
+      'joins the edge network',
+      (source: string) =>
+        changeServiceBlock(source, 'search-green', (block) =>
+          block.replace('    networks: [runtime]', '    networks: [runtime, edge]'),
+        ),
+      checkComposeNetworkPolicy,
+      /attach only to runtime/,
+    ],
+    [
+      'serves the other slot',
+      (source: string) =>
+        changeServiceBlock(source, 'search-green', (block) =>
+          block.replace('ATLAS_SEARCH_SLOT: green', 'ATLAS_SEARCH_SLOT: blue'),
+        ),
+      checkSearchServices,
+      /only the green slot/,
+    ],
+    [
+      'shares a work volume',
+      (source: string) =>
+        changeServiceBlock(source, 'search-green', (block) =>
+          block.replace(
+            'search-green-work:/var/lib/atlas-engine',
+            'search-blue-work:/var/lib/atlas-engine',
+          ),
+        ),
+      checkSearchServices,
+      /its own work volume/,
+    ],
+    [
+      'keeps its working copy on a host path',
+      (source: string) =>
+        changeServiceBlock(source, 'search-blue', (block) =>
+          block.replace('search-blue-work:/var/lib/atlas-engine', './work:/var/lib/atlas-engine'),
+        ),
+      checkSearchServices,
+      /its own work volume/,
+    ],
+    [
+      'mounts the slots writable',
+      (source: string) =>
+        changeServiceBlock(source, 'search-blue', (block) =>
+          block.replace(':/var/lib/atlas:ro', ':/var/lib/atlas'),
+        ),
+      checkSearchServices,
+      /read-only dataset/,
+    ],
+    [
+      'reaches a host by address rather than service name',
+      (source: string) => source.replace('http://search-blue:2322', 'http://172.18.0.5:2322'),
+      checkSearchServices,
+      /reach the blue search host/,
+    ],
+    [
+      'has no memory limit',
+      (source: string) =>
+        changeServiceBlock(source, 'search-blue', (block) =>
+          block.replace(/ {4}mem_limit: .*\n/, ''),
+        ),
+      checkSearchServices,
+      /bounded memory limit/,
+    ],
+    [
+      'has a memory limit the operator cannot set',
+      (source: string) =>
+        changeServiceBlock(source, 'search-green', (block) =>
+          block
+            .replace(/mem_limit: .*/, 'mem_limit: 2g')
+            .replace(/memswap_limit: .*/, 'memswap_limit: 2g'),
+        ),
+      checkSearchServices,
+      /bounded memory limit/,
+    ],
+    [
+      'swaps beyond its memory limit',
+      (source: string) =>
+        changeServiceBlock(source, 'search-blue', (block) =>
+          block.replace(/memswap_limit: .*/, 'memswap_limit: -1'),
+        ),
+      checkSearchServices,
+      /must not swap/,
+    ],
+    [
+      'has no PID limit',
+      (source: string) =>
+        changeServiceBlock(source, 'search-green', (block) =>
+          block.replace(/ {4}pids_limit: .*\n/, ''),
+        ),
+      checkSearchServices,
+      /bounded PID limit/,
+    ],
+    [
+      'has an unlimited PID default',
+      (source: string) =>
+        changeServiceBlock(source, 'search-blue', (block) =>
+          block.replace(/pids_limit: .*/, 'pids_limit: ${ATLAS_SEARCH_HOST_PIDS_LIMIT:--1}'),
+        ),
+      checkSearchServices,
+      /bounded PID limit/,
+    ],
+    [
+      'runs the provisioning image',
+      (source: string) =>
+        changeServiceBlock(source, 'search-blue', (block) =>
+          block.replace('image: atlas-os/search:m2', 'image: atlas-os/search-build:m2'),
+        ),
+      checkSearchServices,
+      /provisioning image/,
+    ],
+  ] as const)('refuses a search host that %s', async (_label, mutate, check, message) => {
+    const mutated = mutate(await compose());
+    expect(() => check(mutated)).toThrow(message);
+  });
+
+  it('keeps build and database tooling out of the serving image', async () => {
+    const dockerfile = await readFile(resolve('infra/images/search.Dockerfile'), 'utf8');
+    expect(() => checkSearchImage(dockerfile)).not.toThrow();
+    const runtime = dockerfile.indexOf('AS search-runtime');
+    const inRuntime = (from: string, to: string) =>
+      dockerfile.slice(0, runtime) + dockerfile.slice(runtime).replace(from, to);
+    for (const [mutated, message] of [
+      [inRuntime('USER 10001:10001', 'USER root'), /USER 10001/],
+      [inRuntime('WORKDIR /app', 'RUN apt-get install -y postgresql\nWORKDIR /app'), /apt-get/],
+      [
+        inRuntime('WORKDIR /app', 'COPY --from=build /workspace /workspace\nWORKDIR /app'),
+        /workspace/,
+      ],
+      [
+        dockerfile.replace(
+          'a89707c0045e4807b2a1180e132e68e108d998709f48b6c94b98a6e281f571a5',
+          'f'.repeat(64),
+        ),
+        /pinned digest/,
+      ],
+    ] as const) {
+      expect(() => checkSearchImage(mutated)).toThrow(message);
+    }
+  });
+
+  it('never makes the provisioning image a service', async () => {
+    const withBuilder = `${await compose()}\n  search-build:\n    image: atlas-os/search-build:m2\n`;
+    expect(() => checkSearchServices(withBuilder)).toThrow(/never be a Compose service/);
   });
 });
 

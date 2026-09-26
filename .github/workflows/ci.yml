@@ -11,7 +11,7 @@ permissions:
 jobs:
   quality:
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
@@ -28,7 +28,10 @@ jobs:
       # Browser end-to-end coverage against the built application and a provisioned snapshot.
       - run: pnpm exec playwright install --with-deps chromium
       - run: pnpm test:e2e
-      # Image build, runtime image inspection, and the offline runtime smoke test.
+      # Image build (serving images and the local-only search provisioning image), runtime image
+      # inspection, the offline runtime smoke test with Persian search from isolated per-slot
+      # engines, and the tiny-extract search pipeline through the real database build and engine.
       - run: pnpm compose:build
       - run: pnpm images:inspect
       - run: pnpm test:offline
+      - run: pnpm test:engine

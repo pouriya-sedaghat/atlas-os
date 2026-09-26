@@ -9,8 +9,13 @@ metadata, activated atomically, and served from the same origin as the Web appli
 renders it with local styles, glyphs and sprites in Persian and English. No dataset is included in
 this repository, and nothing is downloaded at runtime.
 
-Search, reverse geocoding, routing, matrix calculations, isochrones and map matching are still not
-implemented and report themselves as not installed.
+Milestone **M2** adds offline search and reverse geocoding in Persian and English, built from the
+same operator-supplied OpenStreetMap extract as the basemap and served by one private search host
+per snapshot slot, behind a guard that never answers from a stale dataset. The Web application has
+an accessible Persian place search and an explicit "describe this point" action.
+
+Routing, matrix calculations, isochrones and map matching are still not implemented and report
+themselves as not installed.
 
 ## Architecture
 
@@ -55,6 +60,14 @@ The development server proxies `/api` and `/maps` to the local API, so the brows
 origin. Without the fixture step the application still starts and reports that no basemap is
 installed.
 
+For search in the fixture too, build the local images and prepare the dataset fixture instead of
+the basemap fixture (the real engine runs in a Linux container):
+
+```sh
+pnpm compose:build
+pnpm dataset:fixture
+```
+
 For a real dataset, see [provisioning a basemap](docs/development.md#provisioning-a-basemap).
 
 ## Local endpoints
@@ -65,6 +78,8 @@ For a real dataset, see [provisioning a basemap](docs/development.md#provisionin
 - `GET /v1/dataset` — current dataset state.
 - `GET /v1/basemap` — basemap descriptor, or a truthful unavailable state.
 - `GET|HEAD /maps/v1/{snapshotId}/…` — versioned basemap resources with byte-range support.
+- `GET /v1/search?q&limit&language&lat&lon` — place search; `language` is `fa` (default) or `en`.
+- `GET /v1/reverse?lat&lon&language` — the place at a point, if any.
 
 The gateway exposes these under `/api/*` and `/maps/*`, and the Web application at `/`. No HTTP
 endpoint mutates a dataset; provisioning is a command-line operation.
@@ -78,7 +93,8 @@ pnpm lint              pnpm test:integration     pnpm compose:build
 pnpm typecheck         pnpm test:provisioning    pnpm images:inspect
 pnpm test              pnpm test:boundaries      pnpm test:offline
 pnpm basemap:fixture   pnpm test:container       pnpm test:e2e
-pnpm check             pnpm verify               pnpm api:start:fixture
+pnpm dataset:fixture   pnpm test:engine          pnpm api:start:fixture
+pnpm check             pnpm verify               pnpm test:engine:jar
 ```
 
 `pnpm check` is the complete gate that needs no browser and no Docker daemon. `pnpm verify` adds
@@ -102,6 +118,16 @@ reference geometry and coastline polygons — and a preparation missing a requir
 rather than producing an incomplete basemap. See
 [provisioning a basemap](docs/development.md#provisioning-a-basemap).
 
+## Search
+
+Search is built from the raw regional extract alone — the same file, checked by digest, that the
+basemap is built from. Persian spelling variants (Arabic kaf and yeh, Persian and Arabic-Indic
+digits, diacritics, invisible marks) are matched by indexing canonical search-only variants and
+canonicalising every query the same way, while results show names and house numbers exactly as
+mapped. Search answers carry OpenStreetMap attribution under the ODbL, shown separately from the
+basemap's. Quality and resources at the scale of a whole country have not been measured yet; see
+[DATA_SOURCES.md](DATA_SOURCES.md) and the [architecture decision](docs/adr/0001-offline-search.md).
+
 ## Governance
 
 No project-level open-source license has been selected. Licensing is a pending owner decision; do
@@ -116,5 +142,6 @@ provenance is recorded in [DATA_SOURCES.md](DATA_SOURCES.md).
 - [Data lifecycle](docs/data-lifecycle.md)
 - [Development and configuration](docs/development.md)
 - [Supply-chain controls](docs/supply-chain.md)
+- [ADR 0001: offline search](docs/adr/0001-offline-search.md)
 - [Data sources](DATA_SOURCES.md)
 - [Third-party notices](THIRD_PARTY_NOTICES.md)

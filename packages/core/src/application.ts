@@ -7,11 +7,15 @@ import type {
   Capabilities,
   DatasetManager,
   DatasetStatus,
+  PlaceQueryOutcome,
+  SearchComponentStatus,
+  SearchParameters,
   SnapshotDescription,
   SnapshotId,
   SnapshotPreparationRequest,
   ValidationReport,
 } from '@atlas-os/platform';
+import { parseReverseParameters, parseSearchParameters } from '@atlas-os/platform';
 
 import type { AppConfig } from './config.js';
 import { mapPlatformError } from './errors.js';
@@ -74,9 +78,27 @@ export class ApplicationService {
     return this.#invoke(() => this.#resources.read(request));
   }
 
+  /**
+   * Forward search from raw query parameters. Invalid parameters are refused before the platform
+   * consults anything; every other condition comes back as a typed outcome.
+   */
+  async searchPlaces(parameters: SearchParameters): Promise<PlaceQueryOutcome> {
+    const parsed = parseSearchParameters(parameters);
+    if (!parsed.ok) return parsed.outcome;
+    return this.#invoke(() => this.#atlas.search(parsed.request));
+  }
+
+  /** Reverse geocoding from raw query parameters. */
+  async reverseGeocode(parameters: SearchParameters): Promise<PlaceQueryOutcome> {
+    const parsed = parseReverseParameters(parameters);
+    if (!parsed.ok) return parsed.outcome;
+    return this.#invoke(() => this.#atlas.reverseGeocode(parsed.request));
+  }
+
   async readiness(): Promise<ReadinessResult> {
     const dataset = await this.datasetStatus();
     const datasetStatus = dataset.state === 'degraded' ? 'warn' : 'pass';
+    const search = 'search' in dataset ? dataset.search : undefined;
     return {
       checks: [
         {
@@ -93,6 +115,11 @@ export class ApplicationService {
                 : `Dataset state is ${dataset.state}.`,
           name: 'dataset',
           status: datasetStatus,
+        },
+        {
+          message: describeSearch(search),
+          name: 'search',
+          status: searchCheckStatus(search),
         },
       ],
       // A missing dataset is a valid, healthy startup mode: the application is ready to serve
@@ -162,5 +189,30 @@ export class ApplicationService {
     } catch (error) {
       throw mapPlatformError(error);
     }
+  }
+}
+
+/** Search readiness is a warning only when a search component exists but cannot answer. */
+function searchCheckStatus(search: SearchComponentStatus | undefined): 'pass' | 'warn' {
+  if (search === undefined || search.state === 'ready') return 'pass';
+  return search.reason === 'not_installed' || search.reason === 'component_missing'
+    ? 'pass'
+    : 'warn';
+}
+
+function describeSearch(search: SearchComponentStatus | undefined): string {
+  if (search === undefined) return 'Search state is not reported while the dataset is updating.';
+  if (search.state === 'ready') return `Search is serving snapshot ${search.snapshotId}.`;
+  switch (search.reason) {
+    case 'not_installed':
+      return 'Search is not installed on this host.';
+    case 'component_missing':
+      return 'The active snapshot has no search component; the basemap is unaffected.';
+    case 'starting':
+      return 'Search is starting for the active snapshot.';
+    case 'insufficient_space':
+      return 'Search cannot load the active snapshot: its working volume is too small.';
+    default:
+      return `Search is unavailable (${search.reason}); the basemap is unaffected.`;
   }
 }

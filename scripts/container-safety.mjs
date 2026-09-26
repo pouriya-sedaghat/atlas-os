@@ -126,7 +126,7 @@ export function checkComposeNetworkPolicy(compose) {
     throw new Error('Compose edge network must use the bridge driver.');
   }
 
-  for (const service of ['api', 'web', 'updater']) {
+  for (const service of ['api', 'web', 'updater', ...SEARCH_SERVICES]) {
     const networks = serviceList(compose, service, 'networks');
     if (JSON.stringify(networks) !== JSON.stringify(['runtime'])) {
       throw new Error(`Compose ${service} service must attach only to runtime.`);
@@ -144,6 +144,128 @@ export function checkComposeNetworkPolicy(compose) {
   const expectedPort = "'127.0.0.1:${ATLAS_GATEWAY_PORT:-8080}:8080'";
   if (JSON.stringify(gatewayPorts) !== JSON.stringify([expectedPort])) {
     throw new Error('Compose gateway port must publish only on 127.0.0.1.');
+  }
+}
+
+/** One private search host per slot. */
+export const SEARCH_SERVICES = ['search-blue', 'search-green'];
+
+function serviceScalar(compose, service, key) {
+  const block = yamlBlock(compose, service, 2);
+  const line = block.find((entry) => entry.startsWith(`${' '.repeat(4)}${key}:`));
+  return line === undefined ? null : line.slice(4 + key.length + 1).trim();
+}
+
+function serviceEnvironment(compose, service) {
+  const block = yamlBlock(compose, service, 2);
+  const start = block.findIndex((line) => line === '    environment:');
+  if (start === -1) return {};
+  const environment = {};
+  for (let index = start + 1; index < block.length; index += 1) {
+    const match = block[index].match(/^ {6}([A-Z0-9_]+):\s*(.*)$/);
+    if (!match) break;
+    environment[match[1]] = match[2].replace(/^'(.*)'$/, '$1');
+  }
+  return environment;
+}
+
+/**
+ * Each search host serves exactly its own slot from the read-only dataset, keeps its working
+ * copy only in its own named volume, and is reachable only by name on the internal network.
+ * The provisioning image, which carries the database build tools, is never a Compose service.
+ */
+export function checkSearchServices(compose) {
+  if (/search-build/.test(compose)) {
+    throw new Error('The search provisioning image must never be a Compose service.');
+  }
+  const volumes = yamlBlock(compose, 'volumes', 0);
+  const api = serviceEnvironment(compose, 'api');
+  for (const service of SEARCH_SERVICES) {
+    const slot = service.slice('search-'.length);
+    if (serviceScalar(compose, service, 'image') !== 'atlas-os/search:m2') {
+      throw new Error(`Compose ${service} must run the search serving image.`);
+    }
+    if (!yamlBlock(compose, service, 2).includes('      target: search-runtime')) {
+      throw new Error(`Compose ${service} must build the search-runtime stage.`);
+    }
+    if (serviceEnvironment(compose, service).ATLAS_SEARCH_SLOT !== slot) {
+      throw new Error(`Compose ${service} must serve only the ${slot} slot.`);
+    }
+    const mounts = serviceList(compose, service, 'volumes') ?? [];
+    const work = `${service}-work:/var/lib/atlas-engine`;
+    const dataset = '${ATLAS_DATA_ROOT:-../../data}:/var/lib/atlas:ro';
+    if (JSON.stringify(mounts) !== JSON.stringify([dataset, work])) {
+      throw new Error(
+        `Compose ${service} must mount only the read-only dataset and its own work volume.`,
+      );
+    }
+    if (!volumes.includes(`  ${service}-work:`)) {
+      throw new Error(`Compose must declare the named volume ${service}-work.`);
+    }
+    // Bounded, operator-set hard limits: memory with no swap beyond it, and a PID ceiling.
+    const memory = serviceScalar(compose, service, 'mem_limit');
+    if (!/^\$\{ATLAS_SEARCH_HOST_MEMORY_LIMIT:-[1-9][0-9]{0,5}[mg]\}$/.test(memory ?? '')) {
+      throw new Error(
+        `Compose ${service} must set a bounded memory limit from ATLAS_SEARCH_HOST_MEMORY_LIMIT.`,
+      );
+    }
+    if (serviceScalar(compose, service, 'memswap_limit') !== memory) {
+      throw new Error(`Compose ${service} must not swap beyond its memory limit.`);
+    }
+    if (
+      !/^\$\{ATLAS_SEARCH_HOST_PIDS_LIMIT:-[1-9][0-9]{0,5}\}$/.test(
+        serviceScalar(compose, service, 'pids_limit') ?? '',
+      )
+    ) {
+      throw new Error(
+        `Compose ${service} must set a bounded PID limit from ATLAS_SEARCH_HOST_PIDS_LIMIT.`,
+      );
+    }
+    const url = api[`ATLAS_SEARCH_ENGINE_${slot.toUpperCase()}_URL`];
+    if (url !== `http://${service}:2322`) {
+      throw new Error(`Compose api must reach the ${slot} search host by name on the host port.`);
+    }
+  }
+}
+
+/**
+ * The search serving image carries the compiled host, the runtime and the verified engine
+ * archive, and nothing used to build either the host or a search database.
+ */
+export function checkSearchImage(dockerfile) {
+  const stage = runtimeStage(dockerfile, 'search-runtime');
+  for (const required of [
+    'COPY --from=search-host-deploy /prod/search-host/ ./',
+    'COPY --from=jre /opt/java/openjdk /opt/java/openjdk',
+    'COPY --from=engine-archive /engine.jar /opt/atlas-os/engine/engine.jar',
+    'USER 10001:10001',
+    'CMD ["node", "dist/index.js"]',
+  ]) {
+    if (!stage.includes(required)) throw new Error(`search-runtime must include: ${required}`);
+  }
+  for (const forbidden of [
+    '/workspace',
+    'COPY . ',
+    'pnpm',
+    'corepack',
+    'apt-get',
+    'postgres',
+    'osm2pgsql',
+    'nominatim',
+    'python',
+    'search-build',
+  ]) {
+    if (stage.toLowerCase().includes(forbidden)) {
+      throw new Error(`search-runtime contains forbidden runtime content: ${forbidden}`);
+    }
+  }
+  if (
+    !dockerfile.includes(
+      'a89707c0045e4807b2a1180e132e68e108d998709f48b6c94b98a6e281f571a5  /engine.jar',
+    ) ||
+    !dockerfile.includes('test "$(stat -c %s /engine.jar)" = "98219380"')
+  ) {
+    throw new Error('The engine archive must be verified by its pinned digest and size.');
   }
 }
 
@@ -236,8 +358,11 @@ export async function checkContainerSafety(root = process.cwd()) {
     }
   }
 
+  checkSearchImage(await readFile(resolve(root, 'infra/images/search.Dockerfile'), 'utf8'));
+
   const compose = await readFile(resolve(root, 'infra/compose/compose.yaml'), 'utf8');
   checkComposeNetworkPolicy(compose);
+  checkSearchServices(compose);
   for (const target of ['target: api-runtime', 'target: updater-runtime']) {
     if (!compose.includes(target)) throw new Error(`Compose is missing ${target}.`);
   }
@@ -271,6 +396,7 @@ export async function checkContainerSafety(root = process.cwd()) {
 
   for (const manifestPath of [
     'apps/api/package.json',
+    'apps/search-host/package.json',
     'apps/updater/package.json',
     'packages/core/package.json',
     'packages/atlas-os/package.json',

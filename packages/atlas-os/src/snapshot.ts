@@ -88,36 +88,221 @@ const artifactPathSchema = z
     { message: 'Artifact paths must not contain empty or traversal segments.' },
   );
 
-export const snapshotManifestSchema = z
+/**
+ * Fields shared by every manifest schema version.
+ *
+ * Schema version 1 is exactly the M1 shape and is frozen: a snapshot written by M1 must keep
+ * parsing, validating and activating unchanged, and must never be rewritten to migrate it.
+ */
+const commonManifestShape = {
+  /**
+   * State recorded when the snapshot was written. `data/active.json` is the authoritative
+   * record of which snapshot is serving; a slot manifest is never rewritten to flip this.
+   */
+  activation: z.enum(['inactive', 'active', 'previous']),
+  artifactVersions: z.record(z.string(), z.string()),
+  checksums: z.record(artifactPathSchema, checksumSchema),
+  components: z.record(z.string(), componentStateSchema),
+  createdAt: z.iso.datetime(),
+  region: z.string().min(1),
+  slot: slotSchema.optional(),
+  snapshotId: snapshotIdSchema,
+  source: z.object({
+    name: z.string().min(1),
+    timestamp: z.iso.datetime(),
+  }),
+  validation: z.enum(['pending', 'passed', 'failed']),
+};
+
+const snapshotManifestV1Schema = z
   .object({
-    /**
-     * State recorded when the snapshot was written. `data/active.json` is the authoritative
-     * record of which snapshot is serving; a slot manifest is never rewritten to flip this.
-     */
-    activation: z.enum(['inactive', 'active', 'previous']),
-    artifactVersions: z.record(z.string(), z.string()),
+    ...commonManifestShape,
     basemap: basemapComponentSchema.optional(),
-    checksums: z.record(artifactPathSchema, checksumSchema),
-    components: z.record(z.string(), componentStateSchema),
-    createdAt: z.iso.datetime(),
     inputs: z.array(datasetInputSchema).optional(),
-    region: z.string().min(1),
     schemaVersion: z.literal(1),
-    slot: slotSchema.optional(),
-    snapshotId: snapshotIdSchema,
-    source: z.object({
-      name: z.string().min(1),
-      timestamp: z.iso.datetime(),
-    }),
-    validation: z.enum(['pending', 'passed', 'failed']),
   })
   .strict();
 
-export type SnapshotManifest = Omit<z.infer<typeof snapshotManifestSchema>, 'snapshotId'> & {
-  readonly snapshotId: SnapshotId;
-};
+/** An instant with exactly millisecond precision, as the search engine reports it back. */
+const instantSchema = z
+  .string()
+  .regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/)
+  .refine((value) => !Number.isNaN(Date.parse(value)), { message: 'Invalid instant.' });
+
+const searchLanguageSchema = z.enum(['fa', 'en']);
+
+/** A stable public place identifier derived from the OpenStreetMap object type and ID. */
+export const placeIdSchema = z.string().regex(/^osm:(node|way|relation):[1-9][0-9]{0,18}$/);
+
+const coordinateSchema = z
+  .object({
+    latitude: z.number().min(-90).max(90),
+    longitude: z.number().min(-180).max(180),
+  })
+  .strict();
+
+/**
+ * A deterministic question the sealed search database must answer, recorded when it is built and
+ * asked again every time an engine loads it.
+ */
+const searchProbeSchema = z.discriminatedUnion('type', [
+  z
+    .object({
+      expectId: placeIdSchema,
+      language: searchLanguageSchema,
+      query: z.string().min(2).max(100),
+      type: z.literal('search'),
+    })
+    .strict(),
+  z
+    .object({
+      coordinate: coordinateSchema,
+      expectId: placeIdSchema,
+      language: searchLanguageSchema,
+      type: z.literal('reverse'),
+    })
+    .strict(),
+]);
+
+/** The probes a snapshot records: at least one, at most 64. */
+export const searchProbesSchema = z.array(searchProbeSchema).min(1).max(64);
+
+/**
+ * Where the searchable places came from.
+ *
+ * Production snapshots derive them from the same operator-supplied regional extract as the
+ * basemap. The synthetic development fixture has no extract at all, and says so explicitly
+ * rather than pretending to one.
+ */
+const searchSourceSchema = z.discriminatedUnion('kind', [
+  z
+    .object({
+      bytes: z.number().int().positive(),
+      checksum: checksumSchema,
+      kind: z.literal('region_extract'),
+    })
+    .strict(),
+  z
+    .object({
+      checksum: checksumSchema,
+      kind: z.literal('synthetic'),
+    })
+    .strict(),
+]);
+
+const searchAttributionSchema = z.union([
+  z
+    .object({
+      licence: z.literal('ODbL-1.0'),
+      text: z.literal('© OpenStreetMap contributors'),
+      url: z.literal('https://www.openstreetmap.org/copyright'),
+    })
+    .strict(),
+  z
+    .object({
+      licence: z.literal('none'),
+      text: z.literal('Synthetic development fixture — not map data'),
+      url: z.null(),
+    })
+    .strict(),
+]);
+
+const toolIdentitySchema = z
+  .object({
+    name: z.string().min(1).max(64),
+    sha256: checksumSchema.optional(),
+    version: z.string().min(1).max(64),
+  })
+  .strict();
+
+/**
+ * The search component of a schema-2 snapshot.
+ *
+ * The sealed engine database lives read-only under `root`; every file in it is also listed in the
+ * manifest's `checksums`. `treeDigest` covers paths, types, modes, sizes and hashes of the whole
+ * tree, and `generationMarker` binds the snapshot, its source, the post-processed dump and the
+ * engine import date together.
+ */
+const searchComponentSchema = z
+  .object({
+    attribution: searchAttributionSchema,
+    canary: z
+      .object({
+        coordinate: coordinateSchema,
+        objectId: z.literal(0),
+        objectType: z.literal('X'),
+      })
+      .strict(),
+    dump: z
+      .object({
+        bytes: z.number().int().positive(),
+        documents: z.number().int().nonnegative(),
+        places: z.number().int().nonnegative(),
+        sha256: checksumSchema,
+        variants: z
+          .object({
+            addresses: z.number().int().nonnegative(),
+            housenumbers: z.number().int().nonnegative(),
+            names: z.number().int().nonnegative(),
+            postcodes: z.number().int().nonnegative(),
+          })
+          .strict(),
+      })
+      .strict(),
+    engine: z
+      .object({
+        bytes: z.number().int().positive(),
+        directories: z.number().int().positive(),
+        files: z.number().int().positive(),
+        importDate: instantSchema,
+        root: z.literal('search/engine'),
+        treeDigest: checksumSchema,
+      })
+      .strict(),
+    generationMarker: checksumSchema,
+    languages: z
+      .array(searchLanguageSchema)
+      .length(2)
+      .refine((languages) => new Set(languages).size === 2, {
+        message: 'Search languages must be fa and en.',
+      }),
+    probes: searchProbesSchema,
+    source: searchSourceSchema,
+    tools: z.array(toolIdentitySchema).min(1).max(16),
+  })
+  .strict();
+
+const snapshotManifestV2Schema = z
+  .object({
+    ...commonManifestShape,
+    basemap: basemapComponentSchema,
+    inputs: z.array(datasetInputSchema),
+    schemaVersion: z.literal(2),
+    search: searchComponentSchema,
+  })
+  .strict();
+
+export const snapshotManifestSchema = z.discriminatedUnion('schemaVersion', [
+  snapshotManifestV1Schema,
+  snapshotManifestV2Schema,
+]);
+
+type WithSnapshotId<T> = Omit<T, 'snapshotId'> & { readonly snapshotId: SnapshotId };
+
+export type SnapshotManifestV1 = WithSnapshotId<z.infer<typeof snapshotManifestV1Schema>>;
+export type SnapshotManifestV2 = WithSnapshotId<z.infer<typeof snapshotManifestV2Schema>>;
+export type SnapshotManifest = SnapshotManifestV1 | SnapshotManifestV2;
 
 export type BasemapComponent = z.infer<typeof basemapComponentSchema>;
+export type SearchComponent = z.infer<typeof searchComponentSchema>;
+export type SearchProbe = z.infer<typeof searchProbeSchema>;
+export type SearchSource = z.infer<typeof searchSourceSchema>;
+export type ManifestInput = z.infer<typeof datasetInputSchema>;
+
+/** The search component a manifest carries, or `undefined` for a schema-1 (basemap-only) one. */
+export function searchComponentOf(manifest: SnapshotManifest): SearchComponent | undefined {
+  return manifest.schemaVersion === 2 ? manifest.search : undefined;
+}
 
 export function parseSnapshotManifest(input: unknown): SnapshotManifest {
   const result = snapshotManifestSchema.safeParse(input);

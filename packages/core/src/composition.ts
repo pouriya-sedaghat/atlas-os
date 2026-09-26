@@ -1,4 +1,9 @@
-import { createPlatform } from '@atlas-os/platform';
+import type { SearchHostHandle } from '@atlas-os/platform';
+import {
+  createPlatform,
+  createSearchHost,
+  runSearchProbeSelection as runPlatformProbeSelection,
+} from '@atlas-os/platform';
 
 import { ApplicationService } from './application.js';
 import type { AppConfig } from './config.js';
@@ -74,4 +79,44 @@ export async function createProvisioningComposition(
       resources: platform.resources,
     }),
   };
+}
+
+export interface SearchHostComposition {
+  readonly config: AppConfig;
+  readonly host: SearchHostHandle;
+}
+
+/**
+ * Composes the private search host for one slot.
+ *
+ * Core supplies only the shared configuration, the data root and the region; which slot the host
+ * serves and how its engine runs are the platform's own configuration, read from the environment
+ * passed through here without interpretation.
+ */
+export function createSearchHostComposition(
+  environment: Readonly<Record<string, string | undefined>> = process.env,
+  workingDirectory = process.cwd(),
+  log: (event: Readonly<Record<string, unknown>>) => void = (event) =>
+    process.stdout.write(`${JSON.stringify(event)}\n`),
+): SearchHostComposition {
+  const config = loadConfig(environment, workingDirectory);
+  return {
+    config,
+    host: createSearchHost({
+      dataRoot: config.dataRoot,
+      environment,
+      log,
+      region: config.region,
+    }),
+  };
+}
+
+/**
+ * Build-time verification of a freshly prepared search database, run by the search host image
+ * during an explicit preparation. The platform reads everything it needs from the environment.
+ */
+export async function runSearchProbeSelection(
+  environment: Readonly<Record<string, string | undefined>> = process.env,
+): Promise<void> {
+  await runPlatformProbeSelection(environment);
 }

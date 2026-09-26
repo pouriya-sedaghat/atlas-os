@@ -75,6 +75,12 @@ importers:
         specifier: workspace:*
         version: link:../../packages/core
 
+  apps/search-host:
+    dependencies:
+      '@atlas-os/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+
   apps/updater:
     dependencies:
       '@atlas-os/core':

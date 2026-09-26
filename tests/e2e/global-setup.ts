@@ -27,4 +27,16 @@ export default async function globalSetup(config: FullConfig): Promise<void> {
     process.stderr.write(`${result.stdout ?? ''}${result.stderr ?? ''}`);
     throw new Error('Failed to provision the end-to-end basemap fixture.');
   }
+
+  // A second dataset carries the synthetic search fixture, built through the production
+  // provisioner by the real engine when one is configured, otherwise by the engine stand-in.
+  const search = spawnSync(
+    process.execPath,
+    ['--import', 'tsx', resolve(root, 'tests/e2e/provision-search.ts'), '.validation/e2e/search'],
+    { cwd: root, encoding: 'utf8' },
+  );
+  if (search.status !== 0) {
+    process.stderr.write(`${search.stdout ?? ''}${search.stderr ?? ''}`);
+    throw new Error('Failed to provision the end-to-end search fixture.');
+  }
 }

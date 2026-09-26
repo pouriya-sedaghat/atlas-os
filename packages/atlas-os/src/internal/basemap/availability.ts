@@ -1,5 +1,5 @@
 import type { BasemapUnavailableReason } from '../../contracts.js';
-import type { SnapshotManifest } from '../../snapshot.js';
+import type { ActivePointer, SnapshotManifest } from '../../snapshot.js';
 import { parseSnapshotManifest } from '../../snapshot.js';
 import type { SnapshotStore } from '../snapshot/store.js';
 
@@ -21,6 +21,8 @@ export type DatasetResolution =
       readonly state: 'ready';
       readonly activatedAt: string;
       readonly manifest: SnapshotManifest;
+      /** The pointer this resolution was derived from, in full. */
+      readonly pointer: ActivePointer;
     };
 
 export async function resolveDataset(
@@ -85,7 +87,7 @@ export async function resolveDataset(
     };
   }
 
-  return { activatedAt: pointer.activatedAt, manifest, state: 'ready' };
+  return { activatedAt: pointer.activatedAt, manifest, pointer, state: 'ready' };
 }
 
 function describe(error: unknown, fallback: string): string {
